@@ -1,0 +1,9 @@
+/target
+
+.env
+conf/local.toml
+
+docker/
+
+.idea
+.vscode

@@ -1,0 +1,12 @@
+[http]
+port = "7100"
+
+[database]
+user = "postgres"
+password = ""
+url = "localhost:5432"
+name = "postgres"
+max_connections = "50"
+
+[kafka]
+servers = "localhost:29092"
