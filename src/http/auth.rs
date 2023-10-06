@@ -1,0 +1,112 @@
+use std::time::Duration;
+
+use argon2::{
+    password_hash::{rand_core::OsRng, SaltString},
+    Argon2, PasswordHash, PasswordHasher, PasswordVerifier,
+};
+use chrono::{DateTime, Utc};
+use hmac::{Hmac, Mac};
+use jwt::SignWithKey;
+use serde::{Deserialize, Serialize};
+use sha2::Sha256;
+use uuid::Uuid;
+
+/// Enumerates the possible error states for the `auth` module.
+#[derive(Debug, thiserror::Error)]
+pub enum Error {
+    /// Occurs when an error is encountered trying to calculate the hash of a password.
+    #[error("error hashing password")]
+    HashFailure,
+    #[error("error signing authentication token")]
+    SigningFailure,
+}
+
+/// The [`Claims`] struct represents the data contained in the claims section of the JWT.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct Claims {
+    /// Id of the authenticated user.
+    user_id: Uuid,
+    /// Time of token expiry.
+    #[serde(rename = "exp")]
+    expires_at: DateTime<Utc>,
+}
+
+/// Creates a new authentication token for a user signed with the specified key.
+pub fn mint_jwt(user_id: Uuid, signing_key: &str) -> Result<String, Error> {
+    let hmac: Hmac<Sha256> = Hmac::new_from_slice(signing_key.as_bytes()).map_err(|e| {
+        tracing::debug!("error creating jwt signing key: {}", e);
+        Error::SigningFailure
+    })?;
+
+    let claims = Claims {
+        user_id,
+        expires_at: Utc::now() + Duration::from_secs(3600),
+    };
+
+    claims.sign_with_key(&hmac).map_err(|e| {
+        tracing::debug!("error signing jwt: {}", e);
+        Error::SigningFailure
+    })
+}
+
+/// Hashes the given plain-text passsword.
+///
+/// The hashing operation is very CPU intensive so spawn a task to be run in the rayon thread
+/// pool which is good for CPU that kind of work.
+pub async fn hash_password(password: String) -> Result<String, Error> {
+    let (tx, rx) = tokio::sync::oneshot::channel();
+
+    rayon::spawn(move || {
+        let salt = SaltString::generate(&mut OsRng);
+
+        let argon2 = Argon2::default();
+        let password_hash = argon2
+            .hash_password(password.as_bytes(), &salt)
+            .map(|ph| ph.to_string())
+            .map_err(|e| {
+                tracing::debug!("error hashing password: {}", e);
+                Error::HashFailure
+            });
+
+        if tx.send(password_hash).is_err() {
+            tracing::error!("failed to send password hash result over channel");
+        }
+    });
+
+    let hash = rx.await.map_err(|e| {
+        tracing::debug!("error hashing password: {}", e);
+        Error::HashFailure
+    })??;
+
+    Ok(hash)
+}
+
+/// Verifies the password hash for the given password. A value of `false` will be returned
+/// if any error is encountered during verification.
+///
+/// The hash verification operation is very CPU intensive so spawn a task to be run in the
+/// rayon thread pool which is good for that kind of work.
+pub async fn _verify_password(password: String, password_hash: String) -> bool {
+    let (tx, rx) = tokio::sync::oneshot::channel();
+
+    rayon::spawn(move || {
+        let verified = match PasswordHash::new(&password_hash) {
+            Ok(parsed) => Argon2::default()
+                .verify_password(password.as_ref(), &parsed)
+                .is_ok(),
+            Err(e) => {
+                tracing::debug!("failed to parse hashed password: {}", e);
+                false
+            }
+        };
+
+        if tx.send(verified).is_err() {
+            tracing::error!("failed to send password verification result over channel");
+        }
+    });
+
+    rx.await.unwrap_or_else(|e| {
+        tracing::debug!("error verifying password: {}", e);
+        false
+    })
+}

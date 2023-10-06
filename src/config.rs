@@ -68,6 +68,10 @@ pub struct Kafka {
 /// The [`Config`] struct contains all of the available application configuration.
 #[derive(Debug, Deserialize)]
 pub struct Config {
+    /// Key used for HMAC JWT signing when minting tokens and authenticating users. In a real
+    /// application this would probably be a pointer to a key that is stored in a secure location
+    /// like AWS Secrets Manager or similar rather than passing it in directly as an env variable.
+    pub signing_key: String,
     /// HTTP configuration for the application.
     pub http: Http,
     /// Database configuration for the application.
@@ -125,6 +129,8 @@ mod tests {
     #[test]
     fn verify_default_configuration() {
         let config = Config::default();
+
+        assert_eq!("default-signing-key", config.signing_key);
 
         assert_eq!(7100, config.http.port);
 

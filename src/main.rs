@@ -53,9 +53,10 @@ async fn main() -> anyhow::Result<()> {
     // against the database before we start listening for HTTP connections.
     sqlx::migrate!().run(&pool).await?;
 
-    // Configure the routes for the application and start the HTTP server to the configured port.
+    // Configure the routes for the application and start the HTTP server on the configured port.
     let api_addr = SocketAddr::try_from(([127, 0, 0, 1], config.http.port))?;
-    let http_fut = Server::try_bind(&api_addr)?.serve(http::router().into_make_service());
+    let http_fut =
+        Server::try_bind(&api_addr)?.serve(http::router(pool, config).into_make_service());
 
     // If running on a unix system, install a handler for the terminate signal so we can cleanly
     // shutdown. If not running on a unix system then instead use a future that will never return.
@@ -76,7 +77,7 @@ async fn main() -> anyhow::Result<()> {
 
     // Execute all of the futures and return when one of them completes. Ideally only the signal
     // handlers would be the ones that complete as any other case would generally indicate an
-    // error that would cause the applcation to exit.
+    // error that would cause the application to exit.
     tokio::select! {
         http_res = http_fut => {
             if let Err(e) = http_res {

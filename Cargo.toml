@@ -9,20 +9,26 @@ readme = "./README.md"
 
 [dependencies]
 anyhow = "1.0.75"
+argon2 = "0.5.2"
 aws-config = "0.56.1"
-aws-sdk-dynamodb = "0.32.0"
+aws-sdk-dynamodb = "0.33.0"
 axum = { version = "0.6.20", features = ["headers"] }
+chrono = { version = "0.4.31", features = ["serde"] }
 config = "0.13.3"
 dotenvy = "0.15.7"
 futures = "0.3.28"
+hmac = "0.12.1"
+jwt = "0.16.0"
+rayon = "1.8.0"
 serde = { version = "1.0.188", features = ["derive"] }
 serde_json = "1.0.107"
-sqlx = { version = "0.7.2", features = ["runtime-tokio-native-tls", "postgres", "macros", "uuid"] }
+sha2 = "0.10.8"
+sqlx = { version = "0.7.2", features = ["runtime-tokio-native-tls", "postgres", "macros", "uuid", "chrono"] }
 thiserror = "1.0.49"
 tokio = { version = "1.32.0", features = ["full"] }
 tracing = { version = "0.1.37", features = ["log"] }
 tracing-subscriber = { version = "0.3.17", features = ["json", "env-filter"] }
-uuid = { version = "1.4.1", features = ["v4", "fast-rng"] }
+uuid = { version = "1.4.1", features = ["v4", "fast-rng", "serde"] }
 
 [dev-dependencies]
 mockall = "0.11.4"
