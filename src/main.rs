@@ -44,7 +44,7 @@ async fn main() -> anyhow::Result<()> {
         .connect(&config.database.db_conn_str())
         .await?;
 
-    let _ = sqlx::migrate!().run(&pool).await?;
+    sqlx::migrate!().run(&pool).await?;
 
     // Configure the routes for the application and start the HTTP server to the configured port.
     let api_addr = SocketAddr::try_from(([127, 0, 0, 1], config.http.port))?;
