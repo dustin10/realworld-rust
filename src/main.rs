@@ -3,6 +3,7 @@ use realworld::config::Config;
 use realworld::http;
 use sqlx::postgres::PgPoolOptions;
 use std::net::SocketAddr;
+use std::time::Duration;
 use tracing::metadata::LevelFilter;
 use tracing_subscriber::EnvFilter;
 
@@ -39,11 +40,17 @@ async fn main() -> anyhow::Result<()> {
     // setting corresponding environment variables at runtime with the RW_ prefix.
     let config = Config::init_from_env()?;
 
+    // Create the connection pool that will be used to interact with the backend database. In a
+    // real application the user would want to tweak the available parameters based on the expected
+    // load and expose other relevant parameters through the configuration.
     let pool = PgPoolOptions::new()
         .max_connections(config.database.max_connections)
-        .connect(&config.database.db_conn_str())
+        .acquire_timeout(Duration::from_secs(config.database.connection_timeout))
+        .connect(&config.database.conn_str())
         .await?;
 
+    // Run any required SQL migrations contained in the migrations folder that have not yet run
+    // against the database before we start listening for HTTP connections.
     sqlx::migrate!().run(&pool).await?;
 
     // Configure the routes for the application and start the HTTP server to the configured port.

@@ -42,12 +42,14 @@ pub struct Database {
     pub name: String,
     /// Maximum number of connections allowed in the connection pool.
     pub max_connections: u32,
+    /// Maximum number of seconds allowed to wait for a connection from the pool.
+    pub connection_timeout: u64,
 }
 
 impl Database {
     /// Constructs the connection string used to connect to the database server based on the
     /// specified configuration.
-    pub fn db_conn_str(&self) -> String {
+    pub fn conn_str(&self) -> String {
         format!(
             "postgresql://{}:{}@{}/{}",
             self.user, self.password, self.url, self.name
@@ -131,6 +133,7 @@ mod tests {
         assert_eq!("localhost:5432", config.database.url);
         assert_eq!("postgres", config.database.name);
         assert_eq!(50, config.database.max_connections);
+        assert_eq!(60, config.database.connection_timeout);
 
         assert_eq!("localhost:29092", config.kafka.servers);
     }
