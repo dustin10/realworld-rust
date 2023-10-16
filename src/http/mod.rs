@@ -12,10 +12,10 @@ use axum::{
 use sqlx::PgPool;
 use std::sync::Arc;
 
-/// The [`Context`] is the state that is shared between all HTTP handler functions and makes
+/// The [`AppContext`] is the state that is shared between all HTTP handler functions and makes
 /// common data and functionality available to them.
 #[derive(Clone, Debug)]
-pub struct Context {
+pub struct AppContext {
     /// Configuration for the application.
     pub config: Arc<Config>,
     /// Connection pool that allows for querying the database.
@@ -24,7 +24,7 @@ pub struct Context {
 
 /// Creates the [`Router`] that exposes all of the routes that the application serves over HTTP.
 pub fn router(db: PgPool, config: Config) -> Router {
-    let context = Context {
+    let context = AppContext {
         config: Arc::new(config),
         db,
     };

@@ -1,14 +1,21 @@
-use crate::http::{auth, Context, Error};
+use crate::http::{auth, auth::AuthContext, AppContext, Error};
 
-use axum::{extract::State, routing::post, Json, Router};
+use axum::{
+    extract::State,
+    routing::{get, post},
+    Json, Router,
+};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
 use uuid::Uuid;
 
-/// SQL query used to create a user in the database.
+/// SQL query used to create a new user.
 const CREATE_USER_QUERY: &str =
     "INSERT INTO \"user\" (name, email, password) VALUES ($1, $2, $3) RETURNING *";
+
+/// SQL query used to fetch a user by id.
+const GET_USER_BY_ID_QUERY: &str = "SELECT * FROM \"user\" WHERE id = $1";
 
 /// The [`UserRow`] struct is used to let the `sqlx` library easily map a row from the `user` table
 /// in the databse to a struct value.
@@ -32,15 +39,19 @@ struct UserRow {
     updated: Option<DateTime<Utc>>,
 }
 
-/// Creates the [`Router`] for the HTTP endpoints that correspond to the user domain. The following
-/// endpoints are exposed.
+/// Creates the [`Router`] for the HTTP endpoints that correspond to the user domain and requires
+/// the [`AppContext`] to be the state type.
+///
+/// The following list enumerates the endpoints which are exposed by the `users` API.
 ///
 /// * `GET /api/users` - Retrieves the data for the currently logged in user based on the JWT.
 /// * `POST /api/users` - Allows a new user to register.
 /// * `PUT /api/users` - Allows a user to update their information.
 /// * `POST /api/users/login` - Allows a user to authenticate and retrieve a valid JWT.
-pub(super) fn router() -> Router<Context> {
-    Router::new().route("/api/users", post(create_user))
+pub(super) fn router() -> Router<AppContext> {
+    Router::new()
+        .route("/api/users", post(create_user))
+        .route("/api/user", get(get_user))
 }
 
 /// The [`CreateUser`] struct contains the data received from the HTTP request to register a new
@@ -129,7 +140,7 @@ struct UserBody<T> {
 ///   }
 /// }
 async fn create_user(
-    ctx: State<Context>,
+    ctx: State<AppContext>,
     Json(request): Json<UserBody<CreateUser>>,
 ) -> Result<Json<UserBody<User>>, Error> {
     let password_hash = auth::hash_password(request.user.password)
@@ -149,6 +160,43 @@ async fn create_user(
             Error::from(e)
         })?;
 
+    let token =
+        auth::mint_jwt(user_row.id, &ctx.config.signing_key).map_err(|_| Error::Internal)?;
+
+    let user = User::from_row_with_token(user_row, token);
+
+    Ok(Json(UserBody { user }))
+}
+
+/// Handles the get current user API endpoint at `GET /api/user`. The handler will read the id of
+/// the user from the current authentication token and return the user details after verifying the
+/// signature.
+///
+/// # Response Body Format
+///
+/// {
+///   "user": {
+///     "username": "jake",
+///     "email": "jake@jake.jake",
+///     "token": "jwt.token.here",
+///     "bio": "I work at statefarm",
+///     "image": null
+///   }
+/// }
+async fn get_user(
+    ctx: State<AppContext>,
+    auth_ctx: AuthContext,
+) -> Result<Json<UserBody<User>>, Error> {
+    let user_row: UserRow = sqlx::query_as(GET_USER_BY_ID_QUERY)
+        .bind(&auth_ctx.user_id)
+        .fetch_one(&ctx.db)
+        .await
+        .map_err(|e| {
+            tracing::error!("error returned from the database: {}", e);
+            Error::from(e)
+        })?;
+
+    // TODO: pass back token passed in or create new one? it is not clear from the spec.
     let token =
         auth::mint_jwt(user_row.id, &ctx.config.signing_key).map_err(|_| Error::Internal)?;
 

@@ -10,6 +10,7 @@ readme = "./README.md"
 [dependencies]
 anyhow = "1.0.75"
 argon2 = "0.5.2"
+async-trait = "0.1.74"
 aws-config = "0.56.1"
 aws-sdk-dynamodb = "0.33.0"
 axum = { version = "0.6.20", features = ["headers"] }
@@ -18,6 +19,7 @@ config = "0.13.3"
 dotenvy = "0.15.7"
 futures = "0.3.28"
 hmac = "0.12.1"
+http = "0.2.9"
 jwt = "0.16.0"
 rayon = "1.8.0"
 serde = { version = "1.0.188", features = ["derive"] }
