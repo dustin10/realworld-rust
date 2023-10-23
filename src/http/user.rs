@@ -188,7 +188,7 @@ async fn get_user(
     auth_ctx: AuthContext,
 ) -> Result<Json<UserBody<User>>, Error> {
     let user_row: UserRow = sqlx::query_as(GET_USER_BY_ID_QUERY)
-        .bind(&auth_ctx.user_id)
+        .bind(auth_ctx.user_id)
         .fetch_one(&ctx.db)
         .await
         .map_err(|e| {
