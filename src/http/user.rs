@@ -2,10 +2,12 @@ use crate::http::{auth, auth::AuthContext, AppContext, Error};
 
 use axum::{
     extract::State,
+    response::{IntoResponse, Response},
     routing::{get, post},
     Json, Router,
 };
 use chrono::{DateTime, Utc};
+use http::StatusCode;
 use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
 use uuid::Uuid;
@@ -17,6 +19,9 @@ const CREATE_USER_QUERY: &str =
 /// SQL query used to fetch a user by id.
 const GET_USER_BY_ID_QUERY: &str = "SELECT * FROM \"user\" WHERE id = $1";
 
+/// SQL query used to fetch a user by email.
+const GET_USER_BY_EMAIL_QUERY: &str = "SELECT * FROM \"user\" WHERE email = $1";
+
 /// The [`UserRow`] struct is used to let the `sqlx` library easily map a row from the `user` table
 /// in the databse to a struct value.
 #[derive(Debug, FromRow)]
@@ -27,6 +32,8 @@ struct UserRow {
     name: String,
     /// Email address of the user.
     email: String,
+    /// Hashed password for the user.
+    password: String,
     /// Bio for the the user.
     bio: String,
     /// URL to the image of the user.
@@ -50,6 +57,7 @@ struct UserRow {
 /// * `POST /api/users/login` - Allows a user to authenticate and retrieve a valid JWT.
 pub(super) fn router() -> Router<AppContext> {
     Router::new()
+        .route("/api/users/login", post(login_user))
         .route("/api/users", post(create_user))
         .route("/api/user", get(get_user))
 }
@@ -64,6 +72,17 @@ struct CreateUser {
     /// Requested email for the new user.
     email: String,
     /// Plain text password for the new user.
+    password: String,
+}
+
+/// The [`LoginUser`] struct contains the data received from the HTTP request to authenticate a
+/// user.
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct LoginUser {
+    /// Email for the user.
+    email: String,
+    /// Plain text password for the user.
     password: String,
 }
 
@@ -85,6 +104,8 @@ struct User {
 }
 
 impl User {
+    /// Creates a new [`User`] from the given [`UserRow`] retrieved from the database and the
+    /// specified authentication token.
     fn from_row_with_token(user_row: UserRow, token: String) -> User {
         User {
             username: user_row.name,
@@ -166,6 +187,63 @@ async fn create_user(
     let user = User::from_row_with_token(user_row, token);
 
     Ok(Json(UserBody { user }))
+}
+
+/// Handles the user authentication API endpoint at `GET /api/users/login`.
+///
+/// # Request Body Format
+///
+/// ``` json
+/// {
+///   "user":{
+///     "email": "jake@jake.jake",
+///     "password": "jakejake"
+///   }
+/// }
+/// ```
+///
+/// # Required Fields
+///
+/// * `email`
+/// * `password`
+///
+/// # Response Body Format
+///
+/// {
+///   "user": {
+///     "username": "jake",
+///     "email": "jake@jake.jake",
+///     "token": "jwt.token.here",
+///     "bio": "I work at statefarm",
+///     "image": null
+///   }
+/// }
+async fn login_user(
+    ctx: State<AppContext>,
+    Json(request): Json<UserBody<LoginUser>>,
+) -> Result<Response, Error> {
+    let user_row: UserRow = sqlx::query_as(GET_USER_BY_EMAIL_QUERY)
+        .bind(&request.user.email)
+        .fetch_one(&ctx.db)
+        .await
+        .map_err(|e| {
+            tracing::error!("error returned from the database: {}", e);
+            Error::from(e)
+        })?;
+
+    let resp = if auth::verify_password(request.user.password, user_row.password.clone()).await {
+        let token =
+            auth::mint_jwt(user_row.id, &ctx.config.signing_key).map_err(|_| Error::Internal)?;
+
+        let user = User::from_row_with_token(user_row, token);
+
+        Json(UserBody { user }).into_response()
+    } else {
+        tracing::debug!("password verification failed for {}", request.user.email);
+        StatusCode::UNAUTHORIZED.into_response()
+    };
+
+    Ok(resp)
 }
 
 /// Handles the get current user API endpoint at `GET /api/user`. The handler will read the id of

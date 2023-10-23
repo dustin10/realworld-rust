@@ -162,7 +162,7 @@ pub async fn hash_password(password: String) -> Result<String, Error> {
 ///
 /// The hash verification operation is very CPU intensive so spawn a task to be run in the
 /// rayon thread pool which is good for that kind of work.
-pub async fn _verify_password(password: String, password_hash: String) -> bool {
+pub async fn verify_password(password: String, password_hash: String) -> bool {
     let (tx, rx) = tokio::sync::oneshot::channel();
 
     rayon::spawn(move || {
