@@ -41,6 +41,8 @@ pub enum Error {
 pub struct AuthContext {
     /// Id of the authenticated user.
     pub user_id: Uuid,
+    /// Encoded authentication token that the [`AuthContext`] was derived from.
+    pub encoded_jwt: String,
 }
 
 #[async_trait]
@@ -129,6 +131,7 @@ pub fn verify_jwt(encoded_jwt: &str, signing_key: &str) -> Result<AuthContext, E
 
     Ok(AuthContext {
         user_id: claims.user_id,
+        encoded_jwt: encoded_jwt.to_owned(),
     })
 }
 

@@ -9,7 +9,7 @@ use axum::{
 use chrono::{DateTime, Utc};
 use http::StatusCode;
 use serde::{Deserialize, Serialize};
-use sqlx::FromRow;
+use sqlx::{FromRow, PgPool};
 use uuid::Uuid;
 
 /// SQL query used to create a new user.
@@ -21,6 +21,10 @@ const GET_USER_BY_ID_QUERY: &str = "SELECT * FROM \"user\" WHERE id = $1";
 
 /// SQL query used to fetch a user by email.
 const GET_USER_BY_EMAIL_QUERY: &str = "SELECT * FROM \"user\" WHERE email = $1";
+
+/// SQL query used to update a user by id.
+const UPDATE_USER_BY_ID_QUERY: &str =
+    "UPDATE \"user\" SET name = $1, email = $2, password = $3, image = $4, bio = $5 WHERE id = $6 RETURNING *";
 
 /// The [`UserRow`] struct is used to let the `sqlx` library easily map a row from the `user` table
 /// in the databse to a struct value.
@@ -59,7 +63,7 @@ pub(super) fn router() -> Router<AppContext> {
     Router::new()
         .route("/api/users/login", post(login_user))
         .route("/api/users", post(create_user))
-        .route("/api/user", get(get_user))
+        .route("/api/user", get(get_user).put(update_user))
 }
 
 /// The [`CreateUser`] struct contains the data received from the HTTP request to register a new
@@ -84,6 +88,24 @@ struct LoginUser {
     email: String,
     /// Plain text password for the user.
     password: String,
+}
+
+/// The [`UpdateUser`] struct contains the data received from the HTTP request to update a user.
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct UpdateUser {
+    /// Username of the user.
+    username: Option<String>,
+    /// Email address of the user.
+    email: Option<String>,
+    /// Plain text password for the user.
+    password: Option<String>,
+    /// JWT that allows the user to authenticate with the server.
+    token: Option<String>,
+    /// Bio for the the user.
+    bio: Option<String>,
+    /// URL to the image of the user.
+    image: Option<String>,
 }
 
 /// The [`User`] struct contains data that repesents a user of the application as well as a JWT
@@ -222,28 +244,27 @@ async fn login_user(
     ctx: State<AppContext>,
     Json(request): Json<UserBody<LoginUser>>,
 ) -> Result<Response, Error> {
-    let user_row: UserRow = sqlx::query_as(GET_USER_BY_EMAIL_QUERY)
-        .bind(&request.user.email)
-        .fetch_one(&ctx.db)
-        .await
-        .map_err(|e| {
-            tracing::error!("error returned from the database: {}", e);
-            Error::from(e)
-        })?;
+    // if no user is found then just return UNAUTHORIZED instead of not found to prevent an
+    // attacker from fishing for valid email addresses
+    match fetch_user_by_email(&ctx.db, &request.user.email).await? {
+        None => Ok(StatusCode::UNAUTHORIZED.into_response()),
+        Some(user_row) => {
+            let resp =
+                if auth::verify_password(request.user.password, user_row.password.clone()).await {
+                    let token = auth::mint_jwt(user_row.id, &ctx.config.signing_key)
+                        .map_err(|_| Error::Internal)?;
 
-    let resp = if auth::verify_password(request.user.password, user_row.password.clone()).await {
-        let token =
-            auth::mint_jwt(user_row.id, &ctx.config.signing_key).map_err(|_| Error::Internal)?;
+                    let user = User::from_row_with_token(user_row, token);
 
-        let user = User::from_row_with_token(user_row, token);
+                    Json(UserBody { user }).into_response()
+                } else {
+                    tracing::debug!("password verification failed for {}", request.user.email);
+                    StatusCode::UNAUTHORIZED.into_response()
+                };
 
-        Json(UserBody { user }).into_response()
-    } else {
-        tracing::debug!("password verification failed for {}", request.user.email);
-        StatusCode::UNAUTHORIZED.into_response()
-    };
-
-    Ok(resp)
+            Ok(resp)
+        }
+    }
 }
 
 /// Handles the get current user API endpoint at `GET /api/user`. The handler will read the id of
@@ -261,24 +282,119 @@ async fn login_user(
 ///     "image": null
 ///   }
 /// }
-async fn get_user(
+async fn get_user(ctx: State<AppContext>, auth_ctx: AuthContext) -> Result<Response, Error> {
+    match fetch_user_by_id(&ctx.db, &auth_ctx.user_id).await? {
+        Some(user_row) => {
+            let user = User::from_row_with_token(user_row, auth_ctx.encoded_jwt);
+
+            Ok(Json(UserBody { user }).into_response())
+        }
+        None => Ok(StatusCode::NOT_FOUND.into_response()),
+    }
+}
+
+/// Handles the update user API endpoint at `PUT /api/users`. The handler will read the id of the
+/// user from the current authentication token and update the user properties based on the request
+/// body.
+///
+/// # Request Body Format
+///
+/// ``` json
+/// {
+///   "user":{
+///     "email": "jake@jake.com",
+///     "bio": "I like to skateboard",
+///     "image": "https://i.stack.imgur.com/xHWG8.jpg"
+///   }
+/// }
+/// ```
+///
+/// # Accepted Fields
+///
+/// * `email`
+/// * `username`
+/// * `password`
+/// * `image`
+/// * `bio`
+///
+/// # Response Body Format
+///
+/// {
+///   "user": {
+///     "username": "jake",
+///     "email": "jake@jake.com",
+///     "token": "jwt.token.here",
+///     "bio": "I like to skateboard",
+///     "image": "https://i.stack.imgur.com/xHWG8.jpg"
+///   }
+/// }
+async fn update_user(
     ctx: State<AppContext>,
     auth_ctx: AuthContext,
-) -> Result<Json<UserBody<User>>, Error> {
-    let user_row: UserRow = sqlx::query_as(GET_USER_BY_ID_QUERY)
-        .bind(auth_ctx.user_id)
-        .fetch_one(&ctx.db)
+    Json(request): Json<UserBody<UpdateUser>>,
+) -> Result<Response, Error> {
+    match fetch_user_by_id(&ctx.db, &auth_ctx.user_id).await? {
+        None => Ok(StatusCode::UNAUTHORIZED.into_response()),
+        Some(user_row) => {
+            let username = request.user.username.as_ref().unwrap_or(&user_row.name);
+            let email = request.user.email.as_ref().unwrap_or(&user_row.email);
+            let bio = request.user.bio.as_ref().unwrap_or(&user_row.bio);
+            let image = request.user.image.or(user_row.image);
+
+            let password_hash = if let Some(password) = request.user.password {
+                auth::hash_password(password).await.map_err(|e| {
+                    tracing::error!("error hashing password: {}", e);
+                    Error::Internal
+                })?
+            } else {
+                user_row.password
+            };
+
+            // TODO: handle unique constraint violations
+
+            let user_row: UserRow = sqlx::query_as(UPDATE_USER_BY_ID_QUERY)
+                .bind(username)
+                .bind(email)
+                .bind(password_hash)
+                .bind(image)
+                .bind(bio)
+                .bind(user_row.id)
+                .fetch_one(&ctx.db)
+                .await
+                .map_err(|e| {
+                    tracing::error!("error returned from database: {}", e);
+                    Error::from(e)
+                })?;
+
+            // TODO: if password changes should a new token be minted?
+
+            let user = User::from_row_with_token(user_row, auth_ctx.encoded_jwt);
+
+            Ok(Json(UserBody { user }).into_response())
+        }
+    }
+}
+
+/// Retrieves a [`UserRow`] from the database given the id of the user.
+async fn fetch_user_by_id(db: &PgPool, id: &Uuid) -> Result<Option<UserRow>, Error> {
+    sqlx::query_as(GET_USER_BY_ID_QUERY)
+        .bind(id)
+        .fetch_optional(db)
         .await
         .map_err(|e| {
             tracing::error!("error returned from the database: {}", e);
             Error::from(e)
-        })?;
+        })
+}
 
-    // TODO: pass back token passed in or create new one? it is not clear from the spec.
-    let token =
-        auth::mint_jwt(user_row.id, &ctx.config.signing_key).map_err(|_| Error::Internal)?;
-
-    let user = User::from_row_with_token(user_row, token);
-
-    Ok(Json(UserBody { user }))
+/// Retrieves a [`UserRow`] from the database given the email address of the user.
+async fn fetch_user_by_email(db: &PgPool, email: &str) -> Result<Option<UserRow>, Error> {
+    sqlx::query_as(GET_USER_BY_EMAIL_QUERY)
+        .bind(email)
+        .fetch_optional(db)
+        .await
+        .map_err(|e| {
+            tracing::error!("error returned from the database: {}", e);
+            Error::from(e)
+        })
 }
