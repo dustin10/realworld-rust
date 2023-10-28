@@ -26,10 +26,13 @@ const AUTH_PREFIX: &str = "Token ";
 pub enum Error {
     /// Occurs when an error is encountered trying to calculate the hash of a password.
     #[error("error hashing password")]
-    HashFailure,
+    Hash,
     /// Occurs when an error is encountered trying to sign the authentication token.
     #[error("error signing authentication token")]
-    SigningFailure,
+    Signing,
+    /// Occurs when an error is encountered trying to verify the authentication token.
+    #[error("error verifying authentication token")]
+    Verification,
 }
 
 /// The [`AuthContext`] contains the authorization context for the current request. The data is
@@ -92,7 +95,7 @@ pub struct Claims {
 pub fn mint_jwt(user_id: Uuid, signing_key: &str) -> Result<String, Error> {
     let hmac: Hmac<Sha256> = Hmac::new_from_slice(signing_key.as_bytes()).map_err(|e| {
         tracing::debug!("error creating jwt signing key: {}", e);
-        Error::SigningFailure
+        Error::Signing
     })?;
 
     let claims = Claims {
@@ -102,23 +105,27 @@ pub fn mint_jwt(user_id: Uuid, signing_key: &str) -> Result<String, Error> {
 
     claims.sign_with_key(&hmac).map_err(|e| {
         tracing::debug!("error signing jwt: {}", e);
-        Error::SigningFailure
+        Error::Signing
     })
 }
 
-/// Authenticates the JWT by verifying the signature and bootstraps an [`AuthContext`] with the
-/// data contained in the token.
+/// Authenticates the encoded JWT by verifying the signature and ensuring it is not expired,
+/// then bootstraps an [`AuthContext`] with the data contained in the verified token.
 pub fn verify_jwt(encoded_jwt: &str, signing_key: &str) -> Result<AuthContext, Error> {
-    tracing::info!("signing key: {}", signing_key);
     let hmac: Hmac<Sha256> = Hmac::new_from_slice(signing_key.as_bytes()).map_err(|e| {
         tracing::debug!("error creating jwt signing key: {}", e);
-        Error::SigningFailure
+        Error::Verification
     })?;
 
     let claims: Claims = encoded_jwt.verify_with_key(&hmac).map_err(|e| {
         tracing::debug!("error verifying jwt: {}", e);
-        Error::SigningFailure
+        Error::Verification
     })?;
+
+    if claims.expires_at < Utc::now() {
+        tracing::debug!("rejecting JWT as it is expired");
+        return Err(Error::Verification);
+    }
 
     Ok(AuthContext {
         user_id: claims.user_id,
@@ -141,7 +148,7 @@ pub async fn hash_password(password: String) -> Result<String, Error> {
             .map(|ph| ph.to_string())
             .map_err(|e| {
                 tracing::debug!("error hashing password: {}", e);
-                Error::HashFailure
+                Error::Hash
             });
 
         if tx.send(password_hash).is_err() {
@@ -151,7 +158,7 @@ pub async fn hash_password(password: String) -> Result<String, Error> {
 
     let hash = rx.await.map_err(|e| {
         tracing::debug!("error hashing password: {}", e);
-        Error::HashFailure
+        Error::Hash
     })??;
 
     Ok(hash)
