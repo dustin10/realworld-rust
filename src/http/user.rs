@@ -14,17 +14,17 @@ use uuid::Uuid;
 
 /// SQL query used to create a new user.
 const CREATE_USER_QUERY: &str =
-    "INSERT INTO \"user\" (name, email, password) VALUES ($1, $2, $3) RETURNING *";
+    "INSERT INTO users (name, email, password) VALUES ($1, $2, $3) RETURNING *";
 
 /// SQL query used to fetch a user by id.
-const GET_USER_BY_ID_QUERY: &str = "SELECT * FROM \"user\" WHERE id = $1";
+const GET_USER_BY_ID_QUERY: &str = "SELECT * FROM users WHERE id = $1";
 
 /// SQL query used to fetch a user by email.
-const GET_USER_BY_EMAIL_QUERY: &str = "SELECT * FROM \"user\" WHERE email = $1";
+const GET_USER_BY_EMAIL_QUERY: &str = "SELECT * FROM users WHERE email = $1";
 
 /// SQL query used to update a user by id.
 const UPDATE_USER_BY_ID_QUERY: &str =
-    "UPDATE \"user\" SET name = $1, email = $2, password = $3, image = $4, bio = $5 WHERE id = $6 RETURNING *";
+    "UPDATE users SET name = $1, email = $2, password = $3, image = $4, bio = $5 WHERE id = $6 RETURNING *";
 
 /// The [`UserRow`] struct is used to let the `sqlx` library easily map a row from the `user` table
 /// in the databse to a struct value.
