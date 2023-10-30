@@ -69,7 +69,6 @@ pub(super) fn router() -> Router<AppContext> {
 /// The [`CreateUser`] struct contains the data received from the HTTP request to register a new
 /// user.
 #[derive(Debug, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase")]
 struct CreateUser {
     /// Requested username for the new user.
     username: String,
@@ -82,7 +81,6 @@ struct CreateUser {
 /// The [`LoginUser`] struct contains the data received from the HTTP request to authenticate a
 /// user.
 #[derive(Debug, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase")]
 struct LoginUser {
     /// Email for the user.
     email: String,
@@ -92,7 +90,6 @@ struct LoginUser {
 
 /// The [`UpdateUser`] struct contains the data received from the HTTP request to update a user.
 #[derive(Debug, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase")]
 struct UpdateUser {
     /// Username of the user.
     username: Option<String>,
@@ -111,7 +108,6 @@ struct UpdateUser {
 /// The [`User`] struct contains data that repesents a user of the application as well as a JWT
 /// that allows the user to authenticate with the application.
 #[derive(Debug, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase")]
 struct User {
     /// Username of the user.
     username: String,
