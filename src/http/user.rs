@@ -26,8 +26,24 @@ const GET_USER_BY_EMAIL_QUERY: &str = "SELECT * FROM users WHERE email = $1";
 const UPDATE_USER_BY_ID_QUERY: &str =
     "UPDATE users SET name = $1, email = $2, password = $3, image = $4, bio = $5 WHERE id = $6 RETURNING *";
 
-/// The [`UserRow`] struct is used to let the `sqlx` library easily map a row from the `user` table
-/// in the databse to a struct value.
+/// Creates the [`Router`] for the HTTP endpoints that correspond to the user domain and requires
+/// the [`AppContext`] to be the state type.
+///
+/// The following list enumerates the endpoints which are exposed by the `users` API.
+///
+/// * `GET /api/users` - Retrieves the data for the currently logged in user based on the JWT.
+/// * `POST /api/users` - Allows a new user to register.
+/// * `PUT /api/users` - Allows a user to update their information.
+/// * `POST /api/users/login` - Allows a user to authenticate and retrieve a valid JWT.
+pub(super) fn router() -> Router<AppContext> {
+    Router::new()
+        .route("/api/users/login", post(login_user))
+        .route("/api/users", post(create_user))
+        .route("/api/user", get(get_user).put(update_user))
+}
+
+/// The [`UserRow`] struct is used to let the `sqlx` library easily map a row from the `users` table
+/// in the database to a struct value.
 #[derive(Debug, FromRow)]
 struct UserRow {
     /// Id of the user.
@@ -48,22 +64,6 @@ struct UserRow {
     /// Time the user was last modified.
     #[allow(dead_code)]
     updated: Option<DateTime<Utc>>,
-}
-
-/// Creates the [`Router`] for the HTTP endpoints that correspond to the user domain and requires
-/// the [`AppContext`] to be the state type.
-///
-/// The following list enumerates the endpoints which are exposed by the `users` API.
-///
-/// * `GET /api/users` - Retrieves the data for the currently logged in user based on the JWT.
-/// * `POST /api/users` - Allows a new user to register.
-/// * `PUT /api/users` - Allows a user to update their information.
-/// * `POST /api/users/login` - Allows a user to authenticate and retrieve a valid JWT.
-pub(super) fn router() -> Router<AppContext> {
-    Router::new()
-        .route("/api/users/login", post(login_user))
-        .route("/api/users", post(create_user))
-        .route("/api/user", get(get_user).put(update_user))
 }
 
 /// The [`CreateUser`] struct contains the data received from the HTTP request to register a new
@@ -138,7 +138,6 @@ impl User {
 /// The [`UserBody`] struct is the envelope in which different data for a user is returned to the
 /// client based on the incoming request.
 #[derive(Debug, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase")]
 struct UserBody<T> {
     /// User data contained in the envelope.
     user: T,
@@ -169,6 +168,7 @@ struct UserBody<T> {
 ///
 /// # Response Body Format
 ///
+/// ```json
 /// {
 ///   "user": {
 ///     "username": "jake",
@@ -178,6 +178,7 @@ struct UserBody<T> {
 ///     "image": null
 ///   }
 /// }
+/// ```
 async fn create_user(
     ctx: State<AppContext>,
     Json(request): Json<UserBody<CreateUser>>,
@@ -227,6 +228,7 @@ async fn create_user(
 ///
 /// # Response Body Format
 ///
+/// ``` json
 /// {
 ///   "user": {
 ///     "username": "jake",
@@ -236,6 +238,7 @@ async fn create_user(
 ///     "image": null
 ///   }
 /// }
+/// ```
 async fn login_user(
     ctx: State<AppContext>,
     Json(request): Json<UserBody<LoginUser>>,
@@ -269,6 +272,7 @@ async fn login_user(
 ///
 /// # Response Body Format
 ///
+/// ``` json
 /// {
 ///   "user": {
 ///     "username": "jake",
@@ -278,6 +282,7 @@ async fn login_user(
 ///     "image": null
 ///   }
 /// }
+/// ```
 async fn get_user(ctx: State<AppContext>, auth_ctx: AuthContext) -> Result<Response, Error> {
     match fetch_user_by_id(&ctx.db, &auth_ctx.user_id).await? {
         Some(user_row) => {
@@ -315,6 +320,7 @@ async fn get_user(ctx: State<AppContext>, auth_ctx: AuthContext) -> Result<Respo
 ///
 /// # Response Body Format
 ///
+/// ``` json
 /// {
 ///   "user": {
 ///     "username": "jake",
@@ -324,6 +330,7 @@ async fn get_user(ctx: State<AppContext>, auth_ctx: AuthContext) -> Result<Respo
 ///     "image": "https://i.stack.imgur.com/xHWG8.jpg"
 ///   }
 /// }
+/// ```
 async fn update_user(
     ctx: State<AppContext>,
     auth_ctx: AuthContext,

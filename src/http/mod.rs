@@ -1,6 +1,8 @@
+mod article;
 mod auth;
 mod health;
 mod profile;
+mod tag;
 mod user;
 
 use crate::config::Config;
@@ -30,11 +32,15 @@ pub fn router(db: PgPool, config: Config) -> Router {
         db,
     };
 
-    let user_router = user::router().with_state(context.clone());
-    let profile_router = profile::router().with_state(context);
+    let article_router = article::router().with_state(context.clone());
+    let profile_router = profile::router().with_state(context.clone());
+    let user_router = user::router().with_state(context);
     let health_router = health::router();
 
-    user_router.merge(profile_router).merge(health_router)
+    article_router
+        .merge(profile_router)
+        .merge(user_router)
+        .merge(health_router)
 }
 
 /// Enumerates the possible error scenarios for the `http` module.

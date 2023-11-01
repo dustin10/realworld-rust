@@ -11,8 +11,8 @@ use serde::{Deserialize, Serialize};
 use sqlx::{FromRow, PgPool};
 use uuid::Uuid;
 
-/// SQL query used to fetch a profile.
-const GET_PROFILE_QUERY: &str = r#"
+/// SQL query used to fetch a profile by the name of the user.
+const GET_PROFILE_BY_USERNAME_QUERY: &str = r#"
     SELECT
         u.name,
         u.bio,
@@ -22,6 +22,18 @@ const GET_PROFILE_QUERY: &str = r#"
         users AS u
     WHERE
         u.name = $2"#;
+
+/// SQL query used to fetch a profile by the id of the user.
+const GET_PROFILE_BY_ID_QUERY: &str = r#"
+    SELECT
+        u.name,
+        u.bio,
+        u.image,
+        (SELECT COUNT(*) FROM user_follows AS uf WHERE uf.user_id = u.id AND uf.follower_id = $1)::int::bool AS follows
+    FROM
+        users AS u
+    WHERE
+        u.id = $2"#;
 
 /// SQL query which allows a user to follow a profile.
 const INSERT_FOLLOW_QUERY: &str =
@@ -60,17 +72,17 @@ struct ProfileBody {
 /// The [`Profile`] struct contains the details of the public profile for a user of the
 /// application.
 #[derive(Debug, Deserialize, Serialize, FromRow)]
-struct Profile {
+pub(crate) struct Profile {
     /// Username of the profile.
     #[serde(rename = "username")]
-    name: String,
+    pub name: String,
     /// Bio for the the profile.
-    bio: String,
+    pub bio: String,
     /// URL to the image of the profile.
-    image: Option<String>,
+    pub image: Option<String>,
     /// Flag indicating whether or not the profile is being followed by the currently authenticated
     /// user. If no user is curently logged in, then the value will be set to `false`.
-    follows: bool,
+    pub follows: bool,
 }
 
 /// Handles the get user public profile API endpoint at `GET /api/profiles/:username`. The handler
@@ -83,6 +95,7 @@ struct Profile {
 ///
 /// # Response Body Format
 ///
+/// ``` json
 /// {
 ///   "profile": {
 ///     "username": "jake",
@@ -91,6 +104,7 @@ struct Profile {
 ///     "follows": false
 ///   }
 /// }
+/// ```
 async fn get_profile(
     Path(username): Path<String>,
     ctx: State<AppContext>,
@@ -98,7 +112,7 @@ async fn get_profile(
 ) -> Result<Response, Error> {
     let auth_id = auth_ctx.map(|ac| ac.user_id);
 
-    match fetch_profile(&ctx.db, &username, auth_id).await? {
+    match fetch_profile_by_username(&ctx.db, &username, auth_id).await? {
         None => Ok(StatusCode::NOT_FOUND.into_response()),
         Some(profile) => Ok(Json(profile).into_response()),
     }
@@ -110,6 +124,7 @@ async fn get_profile(
 ///
 /// # Response Body Format
 ///
+/// ``` json
 /// {
 ///   "profile": {
 ///     "username": "jake",
@@ -118,6 +133,7 @@ async fn get_profile(
 ///     "follows": true
 ///   }
 /// }
+/// ```
 async fn follow_profile(
     Path(username): Path<String>,
     ctx: State<AppContext>,
@@ -135,6 +151,7 @@ async fn follow_profile(
 ///
 /// # Response Body Format
 ///
+/// ``` json
 /// {
 ///   "profile": {
 ///     "username": "jake",
@@ -143,6 +160,7 @@ async fn follow_profile(
 ///     "follows": false
 ///   }
 /// }
+/// ```
 async fn unfollow_profile(
     Path(username): Path<String>,
     ctx: State<AppContext>,
@@ -156,16 +174,36 @@ async fn unfollow_profile(
 
 /// Retrieves a [`Profile`] from the database given the name of the user that the profile
 /// represents and the id of the authenticated user if available.
-async fn fetch_profile(
+async fn fetch_profile_by_username(
     db: &PgPool,
     username: &str,
     auth_id: Option<Uuid>,
 ) -> Result<Option<Profile>, Error> {
-    let follower_id = auth_id.unwrap_or_else(Uuid::nil);
+    let user_context = auth_id.unwrap_or_else(Uuid::nil);
 
-    sqlx::query_as(GET_PROFILE_QUERY)
-        .bind(follower_id)
+    sqlx::query_as(GET_PROFILE_BY_USERNAME_QUERY)
+        .bind(user_context)
         .bind(username)
+        .fetch_optional(db)
+        .await
+        .map_err(|e| {
+            tracing::error!("error returned from the database: {}", e);
+            Error::from(e)
+        })
+}
+
+/// Retrieves a [`Profile`] from the database given the id of the user that the profile
+/// represents and the id of the authenticated user if available.
+pub(crate) async fn fetch_profile_by_id(
+    db: &PgPool,
+    id: &Uuid,
+    auth_id: Option<Uuid>,
+) -> Result<Option<Profile>, Error> {
+    let user_context = auth_id.unwrap_or_else(Uuid::nil);
+
+    sqlx::query_as(GET_PROFILE_BY_ID_QUERY)
+        .bind(user_context)
+        .bind(id)
         .fetch_optional(db)
         .await
         .map_err(|e| {
@@ -191,7 +229,7 @@ async fn insert_follow(
             Error::from(e)
         })?;
 
-    fetch_profile(db, username, Some(follower_id)).await
+    fetch_profile_by_username(db, username, Some(follower_id)).await
 }
 
 /// Deletes an entry from the table that tracks profile follows for a users. Returns the updated
@@ -211,5 +249,5 @@ async fn delete_follow(
             Error::from(e)
         })?;
 
-    fetch_profile(db, username, Some(follower_id)).await
+    fetch_profile_by_username(db, username, Some(follower_id)).await
 }
