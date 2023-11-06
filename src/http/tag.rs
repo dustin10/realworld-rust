@@ -26,6 +26,9 @@ const CREATE_TAG_QUERY: &str = r#"
 const CREATE_ARTICLE_TAG_QUERY: &str =
     "INSERT INTO article_tags (article_id, tag_id) VALUES ($1, $2)";
 
+/// SQL query used to delete the links from a tag to an article.
+const DELETE_ARTICLE_TAGS_QUERY: &str = "DELETE FROM article_tags WHERE article_id = $1";
+
 /// The [`Tag`] struct is a one-to-one mapping from the row in the database to a struct.
 #[derive(Debug, FromRow)]
 pub(crate) struct Tag {
@@ -75,6 +78,19 @@ pub(crate) async fn insert_article_tag(
     let _ = sqlx::query(CREATE_ARTICLE_TAG_QUERY)
         .bind(article_id)
         .bind(tag_id)
+        .execute(db)
+        .await
+        .map_err(|e| {
+            tracing::error!("error returned from the database: {}", e);
+            Error::from(e)
+        })?;
+
+    Ok(())
+}
+
+pub(crate) async fn delete_article_tags(db: &PgPool, article_id: &Uuid) -> Result<(), Error> {
+    let _ = sqlx::query(DELETE_ARTICLE_TAGS_QUERY)
+        .bind(article_id)
         .execute(db)
         .await
         .map_err(|e| {

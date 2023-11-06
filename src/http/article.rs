@@ -20,6 +20,9 @@ use uuid::Uuid;
 const CREATE_ARTICLE_QUERY: &str =
     "INSERT INTO articles (user_id, slug, title, description, body) VALUES ($1, $2, $3, $4, $5) RETURNING *";
 
+/// SQL query used to fetch an article by slug.
+const GET_ARTICLE_BY_SLUG_QUERY: &str = "SELECT * FROM articles WHERE slug = $1";
+
 /// SQL query used to fetch a computed view of an article by slug.
 const GET_ARTICLE_VIEW_BY_SLUG_QUERY: &str = r#"
     SELECT
@@ -30,6 +33,12 @@ const GET_ARTICLE_VIEW_BY_SLUG_QUERY: &str = r#"
         articles AS a
     WHERE
         a.slug = $2"#;
+
+/// SQL query used to delete entries from the user favorites join table for an article.
+const DELETE_ARTICLE_FAVS_QUERY: &str = "DELETE FROM article_favs WHERE article_id = $1";
+
+/// SQL query used to delete an article.
+const DELETE_ARTICLE_QUERY: &str = "DELETE FROM articles WHERE id = $1";
 
 /// Creates the [`Router`] for the HTTP endpoints that correspond to the `article` domain and requires
 /// the [`AppContext`] to be the state type.
@@ -54,7 +63,10 @@ const GET_ARTICLE_VIEW_BY_SLUG_QUERY: &str = r#"
 pub(super) fn router() -> Router<AppContext> {
     Router::new()
         .route("/api/articles", post(create_article))
-        .route("/api/articles/:slug", get(get_article))
+        .route(
+            "/api/articles/:slug",
+            get(get_article).delete(delete_article),
+        )
 }
 
 /// The [`UserRow`] struct is used to let the `sqlx` library easily map a row from the `users` table
@@ -63,6 +75,8 @@ pub(super) fn router() -> Router<AppContext> {
 struct ArticleRow {
     /// Id of the article.
     id: Uuid,
+    /// Id of the user who authored the article.
+    user_id: Uuid,
     /// Slugified title of the article.
     slug: String,
     /// Title of the article.
@@ -267,6 +281,32 @@ async fn get_article(
     }
 }
 
+/// Handles the delete article by slug API endpoint at `DELETE /api/articles/:slug`. The handler
+/// will read the `slug` path parameter value and delete the article and all associated data for
+/// the matching article if it exists and the authenticated user is the author. Otherwise a 404
+/// respone will be returned.
+async fn delete_article(
+    ctx: State<AppContext>,
+    auth_ctx: AuthContext,
+    Path(slug): Path<String>,
+) -> Result<Response, Error> {
+    // TODO: transaction
+    match fetch_article_by_slug(&ctx.db, &slug).await? {
+        None => Ok(StatusCode::NOT_FOUND.into_response()),
+        Some(article) => {
+            if auth_ctx.user_id != article.user_id {
+                return Ok(StatusCode::FORBIDDEN.into_response());
+            }
+
+            delete_article_favs(&ctx.db, &article.id).await?;
+            tag::delete_article_tags(&ctx.db, &article.id).await?;
+            delete_article_by_id(&ctx.db, &article.id).await?;
+
+            Ok(StatusCode::NO_CONTENT.into_response())
+        }
+    }
+}
+
 /// Retrieves the [`Article`] from the database by slug if it exists, with the specified user
 /// context.
 async fn fetch_article(
@@ -340,6 +380,17 @@ async fn insert_article(
     Ok(row)
 }
 
+async fn fetch_article_by_slug(db: &PgPool, slug: &str) -> Result<Option<ArticleRow>, Error> {
+    sqlx::query_as(GET_ARTICLE_BY_SLUG_QUERY)
+        .bind(slug)
+        .fetch_optional(db)
+        .await
+        .map_err(|e| {
+            tracing::error!("error returned from the database: {}", e);
+            Error::from(e)
+        })
+}
+
 /// Retrieves an [`ArticleView`] identified by the specified slug using the identifier of the
 /// authenticated user, if available, as the user context to determine if the article is favorited
 /// or not.
@@ -359,4 +410,30 @@ async fn fetch_article_view_by_slug(
             tracing::error!("error returned from the database: {}", e);
             Error::from(e)
         })
+}
+
+async fn delete_article_favs(db: &PgPool, article_id: &Uuid) -> Result<(), Error> {
+    let _ = sqlx::query(DELETE_ARTICLE_FAVS_QUERY)
+        .bind(article_id)
+        .execute(db)
+        .await
+        .map_err(|e| {
+            tracing::error!("error returned from the database: {}", e);
+            Error::from(e)
+        })?;
+
+    Ok(())
+}
+
+async fn delete_article_by_id(db: &PgPool, article_id: &Uuid) -> Result<(), Error> {
+    let _ = sqlx::query(DELETE_ARTICLE_QUERY)
+        .bind(article_id)
+        .execute(db)
+        .await
+        .map_err(|e| {
+            tracing::error!("error returned from the database: {}", e);
+            Error::from(e)
+        })?;
+
+    Ok(())
 }
