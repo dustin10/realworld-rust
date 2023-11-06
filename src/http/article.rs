@@ -5,9 +5,9 @@ use crate::http::{
 };
 
 use axum::{
-    extract::State,
+    extract::{Path, State},
     response::{IntoResponse, Response},
-    routing::post,
+    routing::{get, post},
     Json, Router,
 };
 use chrono::{DateTime, Utc};
@@ -52,7 +52,9 @@ const GET_ARTICLE_VIEW_BY_SLUG_QUERY: &str = r#"
 /// * `DELETE /api/articles/:slug/favorite` - Authentication required, removes an article from
 /// favorites.
 pub(super) fn router() -> Router<AppContext> {
-    Router::new().route("/api/articles", post(create_article))
+    Router::new()
+        .route("/api/articles", post(create_article))
+        .route("/api/articles/:slug", get(get_article))
 }
 
 /// The [`UserRow`] struct is used to let the `sqlx` library easily map a row from the `users` table
@@ -86,6 +88,10 @@ struct ArticleRow {
 /// name is a view and not a row. Some may also refer to this as a projection.
 #[derive(Debug, FromRow)]
 struct ArticleView {
+    /// Id of the article.
+    id: Uuid,
+    /// Id of the article.
+    user_id: Uuid,
     /// Slugified title of the article.
     slug: String,
     /// Title of the article.
@@ -208,16 +214,76 @@ async fn create_article(
 ) -> Result<Response, Error> {
     let row = insert_article(&ctx.db, &auth_ctx.user_id, &request.article).await?;
 
-    match fetch_article_view_by_slug(&ctx.db, &row.slug, None).await? {
+    match fetch_article(&ctx.db, &row.slug, None).await? {
         None => Ok(StatusCode::NOT_FOUND.into_response()),
+        Some(article) => Ok(Json(ArticleBody { article }).into_response()),
+    }
+}
+
+/// Handles the get article by slug API endpoint at `GET /api/articles/:slug`. The handler will
+/// read the `slug` path parameter value and return the data for the matching article if it exists,
+/// otherwise it will return a 404 response.
+///
+/// If the request is authenticated, then the favorited and following metadata properties property
+/// of the response will indicate whether the currently authenticated user is following the profile
+/// of the article author and also whether the article has been favorited by the user.
+///
+/// If the request is made unauthenticated, then the favorited and following metadata will always
+/// be set to `false`.
+///
+/// # Response Body Format
+///
+/// ```json
+/// {
+///   "article": {
+///     "slug": "how-to-train-your-dragon",
+///     "title": "How to train your dragon",
+///     "description": "Ever wonder how?",
+///     "body": "It takes a Jacobian",
+///     "tagList": ["dragons", "training"],
+///     "createdAt": "2016-02-18T03:22:56.637Z",
+///     "updatedAt": "2016-02-18T03:48:35.824Z",
+///     "favorited": false,
+///     "favoritesCount": 0,
+///     "author": {
+///       "username": "jake",
+///       "bio": "I work at statefarm",
+///       "image": "https://i.stack.imgur.com/xHWG8.jpg",
+///       "following": false
+///     }
+///   }
+/// }
+/// ```
+async fn get_article(
+    ctx: State<AppContext>,
+    auth_ctx: Option<AuthContext>,
+    Path(slug): Path<String>,
+) -> Result<Response, Error> {
+    let user_ctx = auth_ctx.map(|ac| ac.user_id);
+
+    match fetch_article(&ctx.db, &slug, user_ctx).await? {
+        None => Ok(StatusCode::NOT_FOUND.into_response()),
+        Some(article) => Ok(Json(ArticleBody { article }).into_response()),
+    }
+}
+
+/// Retrieves the [`Article`] from the database by slug if it exists, with the specified user
+/// context.
+async fn fetch_article(
+    db: &PgPool,
+    slug: &str,
+    user_ctx: Option<Uuid>,
+) -> Result<Option<Article>, Error> {
+    match fetch_article_view_by_slug(db, slug, user_ctx).await? {
+        None => Ok(None),
         Some(view) => {
-            let tags = tag::fetch_tags_for_article(&ctx.db, &row.id)
+            let tags = tag::fetch_tags_for_article(db, &view.id)
                 .await?
                 .into_iter()
                 .map(|t| t.name)
                 .collect();
 
-            let author = profile::fetch_profile_by_id(&ctx.db, &auth_ctx.user_id, None)
+            let author = profile::fetch_profile_by_id(db, &view.user_id, user_ctx)
                 .await?
                 .expect("authenticated user exists");
 
@@ -235,7 +301,7 @@ async fn create_article(
                 author,
             };
 
-            Ok(Json(ArticleBody { article }).into_response())
+            Ok(Some(article))
         }
     }
 }
