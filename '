@@ -95,8 +95,8 @@ pub(super) fn router() -> Router<AppContext> {
         )
 }
 
-/// The [`ArticleRow`] struct is used to let the `sqlx` library easily map a row from the `articles`
-/// table in the database to a struct value. It is a one-to-one mapping from the database table.
+/// The [`ArticleRow`] struct is used to let the `sqlx` library easily map a row from the `users` table
+/// in the database to a struct value. It is a one-to-one mapping from the database table.
 #[derive(Debug, FromRow)]
 struct ArticleRow {
     /// Id of the article.
@@ -150,9 +150,7 @@ struct ArticleView {
     favorites_count: i64,
 }
 
-/// The [`Article`] struct contains data that repesents an article as returned from the API. It
-/// contains the relevant article data, tag data and properties relevant to the currently
-/// authenticted user if one exists.
+/// The [`Article`] struct contains data that repesents an article as returned from the API.
 #[derive(Debug, Serialize)]
 struct Article {
     /// Slugified title of the article.
@@ -179,24 +177,6 @@ struct Article {
     favorites_count: i64,
     /// Public [`Profile`] of the user who authored the article.
     author: Profile,
-}
-
-impl Article {
-    /// Creates a new [`Article`] with the given supporting data.
-    fn with_view_tags_and_profile(view: ArticleView, tags: Vec<String>, profile: Profile) -> Self {
-        Article {
-            slug: view.slug,
-            title: view.title,
-            description: view.description,
-            body: view.body,
-            created: view.created,
-            updated: view.updated,
-            favorited: view.favorited,
-            favorites_count: view.favorites_count,
-            tags: Some(tags),
-            author: profile,
-        }
-    }
 }
 
 /// The [`ArticleBody`] struct is the envelope in which different data for an article is
@@ -409,7 +389,19 @@ async fn fetch_article(
                 .await?
                 .expect("authenticated user exists");
 
-            let article = Article::with_view_tags_and_profile(view, tags, author);
+            // TODO: function or builder?
+            let article = Article {
+                slug: view.slug,
+                title: view.title,
+                description: view.description,
+                body: view.body,
+                created: view.created,
+                updated: view.updated,
+                favorited: view.favorited,
+                favorites_count: view.favorites_count,
+                tags: Some(tags),
+                author,
+            };
 
             Ok(Some(article))
         }

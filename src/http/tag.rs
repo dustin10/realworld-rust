@@ -1,20 +1,6 @@
-use crate::http::Error;
-
 use chrono::{DateTime, Utc};
-use sqlx::{FromRow, PgPool};
+use sqlx::FromRow;
 use uuid::Uuid;
-
-/// SQL query used to fetch the tags for an article from the database.
-const GET_TAGS_FOR_ARTICLE_QUERY: &str = r#"
-    SELECT
-        t.*
-    FROM
-        tags AS t INNER JOIN article_tags AS at ON t.id = at.tag_id
-    WHERE
-        at.article_id = $1"#;
-
-/// SQL query used to delete the links from a tag to an article.
-const DELETE_ARTICLE_TAGS_QUERY: &str = "DELETE FROM article_tags WHERE article_id = $1";
 
 /// The [`Tag`] struct is a one-to-one mapping from the row in the database to a struct.
 #[derive(Debug, FromRow)]
@@ -27,34 +13,4 @@ pub(crate) struct Tag {
     /// Time the tag was created.
     #[allow(dead_code)]
     pub created: DateTime<Utc>,
-}
-
-/// Retrieves all of the [`Tag`]s that are associated to the article with the specifid id.
-pub(crate) async fn fetch_tags_for_article(
-    db: &PgPool,
-    article_id: &Uuid,
-) -> Result<Vec<Tag>, Error> {
-    sqlx::query_as(GET_TAGS_FOR_ARTICLE_QUERY)
-        .bind(article_id)
-        .fetch_all(db)
-        .await
-        .map_err(|e| {
-            tracing::error!("error returned from the database: {}", e);
-            Error::from(e)
-        })
-}
-
-/// Deletes the rows from the join table in the database that associates tags to articles given the
-/// id of an article.
-pub(crate) async fn delete_article_tags(db: &PgPool, article_id: &Uuid) -> Result<(), Error> {
-    let _ = sqlx::query(DELETE_ARTICLE_TAGS_QUERY)
-        .bind(article_id)
-        .execute(db)
-        .await
-        .map_err(|e| {
-            tracing::error!("error returned from the database: {}", e);
-            Error::from(e)
-        })?;
-
-    Ok(())
 }
