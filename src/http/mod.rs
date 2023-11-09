@@ -34,11 +34,13 @@ pub fn router(db: PgPool, config: Config) -> Router {
 
     let article_router = article::router().with_state(context.clone());
     let profile_router = profile::router().with_state(context.clone());
+    let tag_router = tag::router().with_state(context.clone());
     let user_router = user::router().with_state(context);
     let health_router = health::router();
 
     article_router
         .merge(profile_router)
+        .merge(tag_router)
         .merge(user_router)
         .merge(health_router)
 }
