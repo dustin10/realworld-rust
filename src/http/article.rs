@@ -380,6 +380,7 @@ async fn insert_article(
     Ok(row)
 }
 
+/// Retrives an [`Article`] from the database identified by the slug.
 async fn fetch_article_by_slug(db: &PgPool, slug: &str) -> Result<Option<ArticleRow>, Error> {
     sqlx::query_as(GET_ARTICLE_BY_SLUG_QUERY)
         .bind(slug)
@@ -412,6 +413,8 @@ async fn fetch_article_view_by_slug(
         })
 }
 
+/// Deletes the rows from the join table in the database that links users to articles that they
+/// have favorited given an article id.
 async fn delete_article_favs(db: &PgPool, article_id: &Uuid) -> Result<(), Error> {
     let _ = sqlx::query(DELETE_ARTICLE_FAVS_QUERY)
         .bind(article_id)
@@ -425,6 +428,7 @@ async fn delete_article_favs(db: &PgPool, article_id: &Uuid) -> Result<(), Error
     Ok(())
 }
 
+/// Deletes an article from the database given the id.
 async fn delete_article_by_id(db: &PgPool, article_id: &Uuid) -> Result<(), Error> {
     let _ = sqlx::query(DELETE_ARTICLE_QUERY)
         .bind(article_id)

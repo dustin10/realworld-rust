@@ -57,7 +57,7 @@ pub(crate) async fn fetch_tags_for_article(
         })
 }
 
-/// Inserts a row into the tags table.
+/// Inserts a row into the tags table and returns the new [`Tag`].
 pub(crate) async fn insert_tag(db: &PgPool, name: &str) -> Result<Tag, Error> {
     sqlx::query_as(CREATE_TAG_QUERY)
         .bind(name)
@@ -69,7 +69,7 @@ pub(crate) async fn insert_tag(db: &PgPool, name: &str) -> Result<Tag, Error> {
         })
 }
 
-/// Inserts a row into the table that associates tags to an article.
+/// Inserts a row into the join table that associates tags to an article.
 pub(crate) async fn insert_article_tag(
     db: &PgPool,
     article_id: &Uuid,
@@ -88,6 +88,8 @@ pub(crate) async fn insert_article_tag(
     Ok(())
 }
 
+/// Deletes the rows from the join table in the database that associates tags to articles given the
+/// id of an article.
 pub(crate) async fn delete_article_tags(db: &PgPool, article_id: &Uuid) -> Result<(), Error> {
     let _ = sqlx::query(DELETE_ARTICLE_TAGS_QUERY)
         .bind(article_id)
