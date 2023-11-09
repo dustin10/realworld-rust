@@ -13,19 +13,6 @@ const GET_TAGS_FOR_ARTICLE_QUERY: &str = r#"
     WHERE
         at.article_id = $1"#;
 
-/// SQL query used to create a new tag in the database.
-const CREATE_TAG_QUERY: &str = r#"
-    INSERT INTO
-        tags (name)
-    VALUES
-        ($1)
-    ON CONFLICT(name) DO UPDATE SET name = EXCLUDED.name
-    RETURNING *"#;
-
-/// SQL query used to create the association of a tag to an article.
-const CREATE_ARTICLE_TAG_QUERY: &str =
-    "INSERT INTO article_tags (article_id, tag_id) VALUES ($1, $2)";
-
 /// SQL query used to delete the links from a tag to an article.
 const DELETE_ARTICLE_TAGS_QUERY: &str = "DELETE FROM article_tags WHERE article_id = $1";
 
@@ -55,37 +42,6 @@ pub(crate) async fn fetch_tags_for_article(
             tracing::error!("error returned from the database: {}", e);
             Error::from(e)
         })
-}
-
-/// Inserts a row into the tags table and returns the new [`Tag`].
-pub(crate) async fn insert_tag(db: &PgPool, name: &str) -> Result<Tag, Error> {
-    sqlx::query_as(CREATE_TAG_QUERY)
-        .bind(name)
-        .fetch_one(db)
-        .await
-        .map_err(|e| {
-            tracing::error!("error returned from the database: {}", e);
-            Error::from(e)
-        })
-}
-
-/// Inserts a row into the join table that associates tags to an article.
-pub(crate) async fn insert_article_tag(
-    db: &PgPool,
-    article_id: &Uuid,
-    tag_id: &Uuid,
-) -> Result<(), Error> {
-    let _ = sqlx::query(CREATE_ARTICLE_TAG_QUERY)
-        .bind(article_id)
-        .bind(tag_id)
-        .execute(db)
-        .await
-        .map_err(|e| {
-            tracing::error!("error returned from the database: {}", e);
-            Error::from(e)
-        })?;
-
-    Ok(())
 }
 
 /// Deletes the rows from the join table in the database that associates tags to articles given the

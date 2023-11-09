@@ -1,7 +1,8 @@
 use crate::http::{
     auth::AuthContext,
     profile::{self, Profile},
-    tag, AppContext, Error,
+    tag::{self, Tag},
+    AppContext, Error,
 };
 
 use axum::{
@@ -19,6 +20,19 @@ use uuid::Uuid;
 /// SQL query used to create a new article.
 const CREATE_ARTICLE_QUERY: &str =
     "INSERT INTO articles (user_id, slug, title, description, body) VALUES ($1, $2, $3, $4, $5) RETURNING *";
+
+/// SQL query used to create a new tag in the database.
+const CREATE_TAG_QUERY: &str = r#"
+    INSERT INTO
+        tags (name)
+    VALUES
+        ($1)
+    ON CONFLICT(name) DO UPDATE SET name = EXCLUDED.name
+    RETURNING *"#;
+
+/// SQL query used to create the association of a tag to an article.
+const CREATE_ARTICLE_TAG_QUERY: &str =
+    "INSERT INTO article_tags (article_id, tag_id) VALUES ($1, $2)";
 
 /// SQL query used to fetch an article by slug.
 const GET_ARTICLE_BY_SLUG_QUERY: &str = "SELECT * FROM articles WHERE slug = $1";
@@ -291,7 +305,7 @@ async fn delete_article(
     Path(slug): Path<String>,
 ) -> Result<Response, Error> {
     // TODO: transaction
-    match fetch_article_by_slug(&ctx.db, &slug).await? {
+    match fetch_article_row_by_slug(&ctx.db, &slug).await? {
         None => Ok(StatusCode::NOT_FOUND.into_response()),
         Some(article) => {
             if auth_ctx.user_id != article.user_id {
@@ -355,14 +369,15 @@ async fn insert_article(
 ) -> Result<ArticleRow, Error> {
     let slug = slug::slugify(&article.title);
 
-    // TODO: transaction
+    let mut tx = db.begin().await?;
+
     let row: ArticleRow = sqlx::query_as(CREATE_ARTICLE_QUERY)
         .bind(user_id)
         .bind(slug)
         .bind(&article.title)
         .bind(&article.description)
         .bind(&article.body)
-        .fetch_one(db)
+        .fetch_one(&mut *tx)
         .await
         .map_err(|e| {
             tracing::error!("error returned from the database: {}", e);
@@ -372,17 +387,34 @@ async fn insert_article(
     if let Some(tags) = &article.tags {
         // TODO: could probably be more efficient
         for name in tags {
-            let tag = tag::insert_tag(db, name).await?;
+            let tag: Tag = sqlx::query_as(CREATE_TAG_QUERY)
+                .bind(name)
+                .fetch_one(&mut *tx)
+                .await
+                .map_err(|e| {
+                    tracing::error!("error returned from the database: {}", e);
+                    Error::from(e)
+                })?;
 
-            tag::insert_article_tag(db, &row.id, &tag.id).await?;
+            let _ = sqlx::query(CREATE_ARTICLE_TAG_QUERY)
+                .bind(row.id)
+                .bind(tag.id)
+                .execute(&mut *tx)
+                .await
+                .map_err(|e| {
+                    tracing::error!("error returned from the database: {}", e);
+                    Error::from(e)
+                })?;
         }
     }
+
+    tx.commit().await?;
 
     Ok(row)
 }
 
-/// Retrives an [`Article`] from the database identified by the slug.
-async fn fetch_article_by_slug(db: &PgPool, slug: &str) -> Result<Option<ArticleRow>, Error> {
+/// Retrives an [`ArticleRow`] from the articles table in the database identified by the given slug.
+async fn fetch_article_row_by_slug(db: &PgPool, slug: &str) -> Result<Option<ArticleRow>, Error> {
     sqlx::query_as(GET_ARTICLE_BY_SLUG_QUERY)
         .bind(slug)
         .fetch_optional(db)
@@ -393,8 +425,8 @@ async fn fetch_article_by_slug(db: &PgPool, slug: &str) -> Result<Option<Article
         })
 }
 
-/// Retrieves an [`ArticleView`] identified by the specified slug using the identifier of the
-/// authenticated user, if available, as the user context to determine if the article is favorited
+/// Retrieves an [`ArticleView`] for an article identified by the given slug using the identifier of
+/// the authenticated user, if available, as the user context to determine if the article is favorited
 /// or not.
 async fn fetch_article_view_by_slug(
     db: &PgPool,
@@ -415,7 +447,7 @@ async fn fetch_article_view_by_slug(
 }
 
 /// Deletes the rows from the join table in the database that links users to articles that they
-/// have favorited given an article id.
+/// have favorited for the given an article id.
 async fn delete_article_favs(db: &PgPool, article_id: &Uuid) -> Result<(), Error> {
     let _ = sqlx::query(DELETE_ARTICLE_FAVS_QUERY)
         .bind(article_id)
