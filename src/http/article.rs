@@ -355,6 +355,7 @@ async fn insert_article(
 ) -> Result<ArticleRow, Error> {
     let slug = slug::slugify(&article.title);
 
+    // TODO: transaction
     let row: ArticleRow = sqlx::query_as(CREATE_ARTICLE_QUERY)
         .bind(user_id)
         .bind(slug)
