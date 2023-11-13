@@ -12,6 +12,7 @@ use axum::{
     response::{IntoResponse, Response},
     Router,
 };
+use serde::Deserialize;
 use sqlx::PgPool;
 use std::sync::Arc;
 
@@ -72,4 +73,22 @@ impl IntoResponse for Error {
             Error::Internal => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
         }
     }
+}
+
+/// Returns the default size of a page of results. Used for deefining the default value during the
+/// derserialization of the query parameters.
+const fn default_limit() -> i32 {
+    20
+}
+
+/// The [`Pagination`] struct contains data that informs an API how to select a page of results to
+/// return to the client. The values are extracted out of the query parameters in the request.
+#[derive(Debug, Deserialize)]
+struct Pagination {
+    /// Maximum number of results to return.
+    #[serde(default = "default_limit")]
+    limit: i32,
+    /// Starting offset into the entire set of results.
+    #[serde(default)]
+    offset: i32,
 }

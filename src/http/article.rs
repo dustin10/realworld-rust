@@ -2,11 +2,11 @@ use crate::http::{
     auth::AuthContext,
     profile::{self, Profile},
     tag::Tag,
-    AppContext, Error,
+    AppContext, Error, Pagination,
 };
 
 use axum::{
-    extract::{Path, State},
+    extract::{Path, Query, State},
     response::{IntoResponse, Response},
     routing::{get, post},
     Json, Router,
@@ -16,6 +16,16 @@ use http::StatusCode;
 use serde::{Deserialize, Serialize};
 use sqlx::{FromRow, PgPool};
 use uuid::Uuid;
+
+/// SQL query used to fetch a single page of the article feed for a user.
+const GET_USER_FEED_PAGE_QUERY: &str = r#"
+    SELECT 
+        a.*
+    FROM articles AS a INNER JOIN user_follows AS uf ON a.user_id = uf.user_id
+    WHERE uf.follower_id = $1
+    ORDER BY a.created DESC
+    LIMIT $2
+    OFFSET $3"#;
 
 /// SQL query used to create a new article.
 const CREATE_ARTICLE_QUERY: &str =
@@ -88,6 +98,7 @@ const DELETE_ARTICLE_QUERY: &str = "DELETE FROM articles WHERE id = $1";
 /// favorites.
 pub(super) fn router() -> Router<AppContext> {
     Router::new()
+        .route("/api/articles/feed", get(user_feed))
         .route("/api/articles", post(create_article))
         .route(
             "/api/articles/:slug",
@@ -207,6 +218,14 @@ struct ArticleBody<T> {
     article: T,
 }
 
+/// The [`ArticlesBody`] struct is the envelope in which multiple [`Article`]s are returned to the
+/// client.
+#[derive(Debug, Serialize)]
+struct ArticlesBody {
+    /// Articles that make up the response body.
+    articles: Vec<Article>,
+}
+
 /// The [`CreateArticle`] struct contains the data received from the HTTP request to create a new
 /// article.
 #[derive(Debug, Deserialize, Serialize)]
@@ -220,6 +239,67 @@ struct CreateArticle {
     /// List of tags associated with the article.
     #[serde(rename = "tagList")]
     tags: Option<Vec<String>>,
+}
+
+/// Handles the get user feed endpoint at `GET /api/articles/feed` which returns articles authored
+/// by users who the currently authenticted user follows.
+///
+/// # Response Body Format
+///
+/// ```json
+/// {
+///   "articles": [{
+///     "slug": "how-to-train-your-dragon",
+///     "title": "How to train your dragon",
+///     "description": "Ever wonder how?",
+///     "body": "It takes a Jacobian",
+///     "tagList": ["dragons", "training"],
+///     "createdAt": "2016-02-18T03:22:56.637Z",
+///     "updatedAt": "2016-02-18T03:48:35.824Z",
+///     "favorited": false,
+///     "favoritesCount": 0,
+///     "author": {
+///       "username": "jake",
+///       "bio": "I work at statefarm",
+///       "image": "https://i.stack.imgur.com/xHWG8.jpg",
+///       "following": false
+///     }
+///   }]
+/// }
+/// ```
+async fn user_feed(
+    ctx: State<AppContext>,
+    auth_ctx: AuthContext,
+    page: Query<Pagination>,
+) -> Result<Json<ArticlesBody>, Error> {
+    let article_views =
+        fetch_article_views_for_user_feed(&ctx.db, &auth_ctx.user_id, &page.0).await?;
+
+    let mut articles = Vec::with_capacity(article_views.len());
+
+    for view in article_views {
+        let tags = sqlx::query_as(GET_TAGS_FOR_ARTICLE_QUERY)
+            .bind(view.id)
+            .fetch_all(&ctx.db)
+            .await
+            .map_err(|e| {
+                tracing::error!("error returned from the database: {}", e);
+                Error::from(e)
+            })?
+            .into_iter()
+            .map(|t: Tag| t.name)
+            .collect();
+
+        let author = profile::fetch_profile_by_id(&ctx.db, &view.user_id, Some(auth_ctx.user_id))
+            .await?
+            .expect("article author exists");
+
+        let article = Article::with_view_tags_and_profile(view, tags, author);
+
+        articles.push(article);
+    }
+
+    Ok(Json(ArticlesBody { articles }))
 }
 
 /// Handles the create article API endpoint at `POST /api/articles`.
@@ -495,6 +575,25 @@ async fn fetch_article_view_by_slug(
         .bind(user_context)
         .bind(slug)
         .fetch_optional(db)
+        .await
+        .map_err(|e| {
+            tracing::error!("error returned from the database: {}", e);
+            Error::from(e)
+        })
+}
+
+/// Retrives a [`Vec`] of [`ArticleView`]s that make up a page of articles in the feed of the
+/// specified user.
+async fn fetch_article_views_for_user_feed(
+    db: &PgPool,
+    user_id: &Uuid,
+    page: &Pagination,
+) -> Result<Vec<ArticleView>, Error> {
+    sqlx::query_as(GET_USER_FEED_PAGE_QUERY)
+        .bind(user_id)
+        .bind(page.limit)
+        .bind(page.offset)
+        .fetch_all(db)
         .await
         .map_err(|e| {
             tracing::error!("error returned from the database: {}", e);
