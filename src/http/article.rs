@@ -20,7 +20,9 @@ use uuid::Uuid;
 /// SQL query used to fetch a single page of the article feed for a user.
 const GET_USER_FEED_PAGE_QUERY: &str = r#"
     SELECT 
-        a.*
+        a.*,
+        (SELECT COUNT(af.*) FROM article_favs AS af WHERE af.article_id = a.id AND af.user_id = $1)::int::bool AS favorited,
+        (SELECT COUNT(af.*) FROM article_favs AS af WHERE af.article_id = a.id) as favorites_count
     FROM articles AS a INNER JOIN user_follows AS uf ON a.user_id = uf.user_id
     WHERE uf.follower_id = $1
     ORDER BY a.created DESC
