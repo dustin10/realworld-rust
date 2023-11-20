@@ -1,6 +1,6 @@
 use crate::http::{
     auth::AuthContext,
-    profile::{self, Profile},
+    profile::{self, fetch_profile_by_id, Profile},
     tag::Tag,
     AppContext, Error, Pagination,
 };
@@ -8,7 +8,7 @@ use crate::http::{
 use axum::{
     extract::{Path, Query, State},
     response::{IntoResponse, Response},
-    routing::{get, post},
+    routing::{delete, get, post},
     Json, Router,
 };
 use chrono::{DateTime, Utc};
@@ -78,9 +78,24 @@ const DELETE_ARTICLE_TAGS_QUERY: &str = "DELETE FROM article_tags WHERE article_
 /// SQL query used to delete an article.
 const DELETE_ARTICLE_QUERY: &str = "DELETE FROM articles WHERE id = $1";
 
+/// SQL query used to create a new comment for an article.
+const CREATE_ARTICLE_COMMENT_QUERY: &str =
+    "INSERT INTO article_comments (user_id, article_id, body) VALUES ($1, $2, $3)";
+
+/// SQL query used to fetch the comments for a single article.
+const GET_ARTICLE_COMMENTS_QUERY: &str = r#"
+    SELECT ac.* 
+    FROM article_comments AS ac INNER JOIN articles AS a ON ac.article_id = a.id
+    WHERE a.slug = $1
+    ORDER BY ac.created ASC"#;
+
+/// SQL query used to delete a comment from an article.
+const DELETE_ARTICLE_COMMENT_QUERY: &str =
+    "DELETE FROM article_comments WHERE id = $1 AND user_id = $2";
+
 /// SQL query used to create an entry in the table that captures favorited articles for a user.
 const CREATE_USER_ARTICLE_FAV_QUERY: &str =
-    "INSERT INTO article_favs (article_id, user_id) VALUES ($1, $2)";
+    "INSERT INTO article_favs (article_id, user_id) VALUES ($1, $2) RETURNING *";
 
 /// SQL query used to delete the entry in the table that captures favorited articles for a user.
 const DELETE_USER_ARTICLE_FAV_QUERY: &str =
@@ -118,6 +133,11 @@ pub(super) fn router() -> Router<AppContext> {
             "/api/articles/:slug/favorite",
             post(favorite_article).delete(unfavorite_article),
         )
+        .route(
+            "/api/articles/:slug/comments",
+            post(create_comment).get(get_comments),
+        )
+        .route("/api/articles/:slug/comments/:id", delete(delete_comment))
 }
 
 /// The [`ArticleRow`] struct is used to let the `sqlx` library easily map a row from the `articles`
@@ -253,6 +273,74 @@ struct CreateArticle {
     /// List of tags associated with the article.
     #[serde(rename = "tagList")]
     tags: Option<Vec<String>>,
+}
+
+/// The [`CommentBody`] struct is the envelope in which data for a comment is returned to the
+/// client based on the incoming request.
+#[derive(Debug, Deserialize, Serialize)]
+struct CommentBody<T> {
+    /// Comment data contained in the envelope.
+    comment: T,
+}
+
+/// The [`CommentsBody`] struct is the envelope in which multiple [`Comments`]s for a given article
+/// are returned to the client.
+#[derive(Debug, Serialize)]
+struct CommentsBody {
+    /// [`Vec`] of [`Comment`]s for an article.
+    comments: Vec<Comment>,
+}
+
+/// The [`CreateComment`] struct contains the data received from the HTTP request to create a new
+/// comment on an article.
+#[derive(Debug, Deserialize)]
+struct CreateComment {
+    /// Text of the comment.
+    body: String,
+}
+
+/// The [`CommentRow`] struct is used to let the `sqlx` library easily map a row from the
+/// `comments` table in the database to a struct value.
+#[derive(Debug, FromRow)]
+struct CommentRow {
+    /// Id of the comment.
+    id: Uuid,
+    /// Id of the user who authored the comment.
+    user_id: Uuid,
+    /// Id of the article the comment was made on.
+    #[allow(dead_code)]
+    article_id: Uuid,
+    /// Body text of the comment.
+    body: String,
+    /// Time at which the comment was made.
+    created: DateTime<Utc>,
+}
+
+/// The [`Comment`] struct contains data that repesents a comment on an article made by a
+/// registered user of the application.
+#[derive(Debug, Serialize)]
+struct Comment {
+    /// Id of the comment.
+    id: Uuid,
+    /// Body text of the comment.
+    body: String,
+    /// Time at which the comment was made.
+    #[serde(rename = "createdAt")]
+    created: DateTime<Utc>,
+    /// Public profile of the user who made the comment.
+    author: Profile,
+}
+
+impl Comment {
+    /// Creates a new [`Comment`] given the database row and author profile.
+    fn from_row_and_profile(row: CommentRow, profile: Profile) -> Self {
+        Self {
+            id: row.id,
+            body: row.body,
+            created: row.created,
+            author: profile,
+        }
+    }
 }
 
 /// Handles the get user feed endpoint at `GET /api/articles/feed` which returns articles authored
@@ -475,6 +563,140 @@ async fn delete_article(
             Ok(StatusCode::NO_CONTENT.into_response())
         }
     }
+}
+
+/// Handles the create article comment API endpoint at `POST /api/articles/:slug/comments`.
+///
+/// # Request Body Format
+///
+/// ``` json
+/// {
+///   "comment":{
+///     "body": "His name was my name too."
+///   }
+/// }
+/// ```
+///
+/// # Field Validation
+///
+/// * `body` - required
+///
+/// # Response Body Format
+///
+/// ```json
+/// {
+///   "comment": {
+///     "id": 1,
+///     "createdAt": "2016-02-18T03:22:56.637Z",
+///     "body": "It takes a Jacobian",
+///     "author": {
+///       "username": "jake",
+///       "bio": "I work at statefarm",
+///       "image": "https://i.stack.imgur.com/xHWG8.jpg",
+///       "following": false
+///     }
+///   }
+/// }
+/// ```
+async fn create_comment(
+    ctx: State<AppContext>,
+    auth_ctx: AuthContext,
+    Path(slug): Path<String>,
+    Json(request): Json<CommentBody<CreateComment>>,
+) -> Result<Response, Error> {
+    match fetch_article_row_by_slug(&ctx.db, &slug).await? {
+        None => Ok(StatusCode::NOT_FOUND.into_response()),
+        Some(row) => {
+            let comment_row: CommentRow = sqlx::query_as(CREATE_ARTICLE_COMMENT_QUERY)
+                .bind(row.id)
+                .bind(auth_ctx.user_id)
+                .bind(&request.comment.body)
+                .fetch_one(&ctx.db)
+                .await
+                .map_err(|e| {
+                    tracing::error!("error returned from the database: {}", e);
+                    Error::from(e)
+                })?;
+
+            let profile =
+                profile::fetch_profile_by_id(&ctx.db, &comment_row.user_id, Some(auth_ctx.user_id))
+                    .await?
+                    .expect("comment author should exist");
+
+            let comment = Comment::from_row_and_profile(comment_row, profile);
+
+            Ok(Json(CommentBody { comment }).into_response())
+        }
+    }
+}
+
+/// Handles the get article comments API endpoint at `GET /api/articles/:slug/comments`. If there
+/// is an authentication context associated with the request then the comment author's profile will
+/// be populated based on the authenticated user.
+///
+/// # Response Body Format
+///
+/// ```json
+/// {
+///   "comments": [{
+///     "id": 1,
+///     "createdAt": "2016-02-18T03:22:56.637Z",
+///     "body": "It takes a Jacobian",
+///     "author": {
+///       "username": "jake",
+///       "bio": "I work at statefarm",
+///       "image": "https://i.stack.imgur.com/xHWG8.jpg",
+///       "following": false
+///     }
+///   }]
+/// }
+/// ```
+async fn get_comments(
+    ctx: State<AppContext>,
+    auth_ctx: Option<AuthContext>,
+    Path(slug): Path<String>,
+) -> Result<Json<CommentsBody>, Error> {
+    let comment_rows: Vec<CommentRow> = sqlx::query_as(GET_ARTICLE_COMMENTS_QUERY)
+        .bind(slug)
+        .fetch_all(&ctx.db)
+        .await?;
+
+    let user_context = auth_ctx.map(|ac| ac.user_id);
+
+    let mut comments = Vec::with_capacity(comment_rows.len());
+
+    for row in comment_rows {
+        let profile = profile::fetch_profile_by_id(&ctx.db, &row.user_id, user_context)
+            .await?
+            .expect("comment author should exist");
+
+        let comment = Comment::from_row_and_profile(row, profile);
+
+        comments.push(comment);
+    }
+
+    Ok(Json(CommentsBody { comments }))
+}
+
+/// Handles the delete article comment API endpoint at `DELETE /api/articles/:slug/comments/:id`.
+async fn delete_comment(
+    ctx: State<AppContext>,
+    auth_ctx: AuthContext,
+    Path(id): Path<Uuid>,
+) -> Result<StatusCode, Error> {
+    // TODO: we could do better here by checking affected rows affected and returning 404 if zero
+
+    sqlx::query(DELETE_ARTICLE_COMMENT_QUERY)
+        .bind(id)
+        .bind(auth_ctx.user_id)
+        .execute(&ctx.db)
+        .await
+        .map_err(|e| {
+            tracing::error!("error returned from the database: {}", e);
+            Error::from(e)
+        })?;
+
+    Ok(StatusCode::NO_CONTENT)
 }
 
 /// Handles the favorite article API endpoint at `POST /api/articles/:slug/favorite`. The handler
