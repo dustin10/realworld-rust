@@ -78,6 +78,14 @@ const DELETE_ARTICLE_TAGS_QUERY: &str = "DELETE FROM article_tags WHERE article_
 /// SQL query used to delete an article.
 const DELETE_ARTICLE_QUERY: &str = "DELETE FROM articles WHERE id = $1";
 
+/// SQL query used to create an entry in the table that captures favorited articles for a user.
+const CREATE_USER_ARTICLE_FAV_QUERY: &str =
+    "INSERT INTO article_favs (article_id, user_id) VALUES ($1, $2)";
+
+/// SQL query used to delete the entry in the table that captures favorited articles for a user.
+const DELETE_USER_ARTICLE_FAV_QUERY: &str =
+    "DELETE FROM article_favs WHERE article_id = $1 AND user_id = $2";
+
 /// Creates the [`Router`] for the HTTP endpoints that correspond to the `article` domain and requires
 /// the [`AppContext`] to be the state type.
 ///
@@ -105,6 +113,10 @@ pub(super) fn router() -> Router<AppContext> {
         .route(
             "/api/articles/:slug",
             get(get_article).delete(delete_article),
+        )
+        .route(
+            "/api/articles/:slug/favorite",
+            post(favorite_article).delete(unfavorite_article),
         )
 }
 
@@ -461,6 +473,118 @@ async fn delete_article(
             tx.commit().await?;
 
             Ok(StatusCode::NO_CONTENT.into_response())
+        }
+    }
+}
+
+/// Handles the favorite article API endpoint at `POST /api/articles/:slug/favorite`. The handler
+/// will read the `slug` path parameter value, favorite the article using the currently authenticated
+/// user and return the data for the matching article if it exists, otherwise it will return a 404
+/// response.
+///
+/// # Response Body Format
+///
+/// ```json
+/// {
+///   "article": {
+///     "slug": "how-to-train-your-dragon",
+///     "title": "How to train your dragon",
+///     "description": "Ever wonder how?",
+///     "body": "It takes a Jacobian",
+///     "tagList": ["dragons", "training"],
+///     "createdAt": "2016-02-18T03:22:56.637Z",
+///     "updatedAt": "2016-02-18T03:48:35.824Z",
+///     "favorited": false,
+///     "favoritesCount": 0,
+///     "author": {
+///       "username": "jake",
+///       "bio": "I work at statefarm",
+///       "image": "https://i.stack.imgur.com/xHWG8.jpg",
+///       "following": false
+///     }
+///   }
+/// }
+/// ```
+async fn favorite_article(
+    ctx: State<AppContext>,
+    auth_ctx: AuthContext,
+    Path(slug): Path<String>,
+) -> Result<Response, Error> {
+    // TODO: handle case where favorite entry already exists
+
+    match fetch_article_row_by_slug(&ctx.db, &slug).await? {
+        None => Ok(StatusCode::NOT_FOUND.into_response()),
+        Some(row) => {
+            sqlx::query(CREATE_USER_ARTICLE_FAV_QUERY)
+                .bind(row.id)
+                .bind(auth_ctx.user_id)
+                .execute(&ctx.db)
+                .await
+                .map_err(|e| {
+                    tracing::error!("error returned from the database: {}", e);
+                    Error::from(e)
+                })?;
+
+            let article = fetch_article(&ctx.db, &slug, Some(auth_ctx.user_id))
+                .await?
+                .expect("article exists");
+
+            Ok(Json(ArticleBody { article }).into_response())
+        }
+    }
+}
+
+/// Handles the unfavorite article API endpoint at `DELETE /api/articles/:slug/favorite`. The handler
+/// will read the `slug` path parameter value, unfavorite the article using the currently authenticated
+/// user and return the data for the matching article if it exists, otherwise it will return a 404
+/// response.
+///
+/// # Response Body Format
+///
+/// ```json
+/// {
+///   "article": {
+///     "slug": "how-to-train-your-dragon",
+///     "title": "How to train your dragon",
+///     "description": "Ever wonder how?",
+///     "body": "It takes a Jacobian",
+///     "tagList": ["dragons", "training"],
+///     "createdAt": "2016-02-18T03:22:56.637Z",
+///     "updatedAt": "2016-02-18T03:48:35.824Z",
+///     "favorited": false,
+///     "favoritesCount": 0,
+///     "author": {
+///       "username": "jake",
+///       "bio": "I work at statefarm",
+///       "image": "https://i.stack.imgur.com/xHWG8.jpg",
+///       "following": false
+///     }
+///   }
+/// }
+/// ```
+async fn unfavorite_article(
+    ctx: State<AppContext>,
+    auth_ctx: AuthContext,
+    Path(slug): Path<String>,
+) -> Result<Response, Error> {
+    match fetch_article_row_by_slug(&ctx.db, &slug).await? {
+        None => Ok(StatusCode::NOT_FOUND.into_response()),
+        Some(row) => {
+            sqlx::query(DELETE_USER_ARTICLE_FAV_QUERY)
+                .bind(row.id)
+                .bind(auth_ctx.user_id)
+                .execute(&ctx.db)
+                .await
+                .map_err(|e| {
+                    tracing::error!("error returned from the database: {}", e);
+                    Error::from(e)
+                })?;
+
+            let article = fetch_article(&ctx.db, &slug, Some(auth_ctx.user_id))
+                .await?
+                .expect("article exists");
+
+            Ok(Json(ArticleBody { article }).into_response())
         }
     }
 }
