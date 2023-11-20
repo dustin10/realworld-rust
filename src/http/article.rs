@@ -1,6 +1,6 @@
 use crate::http::{
     auth::AuthContext,
-    profile::{self, fetch_profile_by_id, Profile},
+    profile::{self, Profile},
     tag::Tag,
     AppContext, Error, Pagination,
 };
@@ -80,7 +80,7 @@ const DELETE_ARTICLE_QUERY: &str = "DELETE FROM articles WHERE id = $1";
 
 /// SQL query used to create a new comment for an article.
 const CREATE_ARTICLE_COMMENT_QUERY: &str =
-    "INSERT INTO article_comments (user_id, article_id, body) VALUES ($1, $2, $3)";
+    "INSERT INTO article_comments (user_id, article_id, body) VALUES ($1, $2, $3) RETURNING *";
 
 /// SQL query used to fetch the comments for a single article.
 const GET_ARTICLE_COMMENTS_QUERY: &str = r#"
@@ -608,8 +608,8 @@ async fn create_comment(
         None => Ok(StatusCode::NOT_FOUND.into_response()),
         Some(row) => {
             let comment_row: CommentRow = sqlx::query_as(CREATE_ARTICLE_COMMENT_QUERY)
-                .bind(row.id)
                 .bind(auth_ctx.user_id)
+                .bind(row.id)
                 .bind(&request.comment.body)
                 .fetch_one(&ctx.db)
                 .await
@@ -682,7 +682,7 @@ async fn get_comments(
 async fn delete_comment(
     ctx: State<AppContext>,
     auth_ctx: AuthContext,
-    Path(id): Path<Uuid>,
+    Path((_slug, id)): Path<(String, Uuid)>,
 ) -> Result<StatusCode, Error> {
     // TODO: we could do better here by checking affected rows affected and returning 404 if zero
 
