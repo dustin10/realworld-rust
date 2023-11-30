@@ -29,5 +29,6 @@ struct Health {
 ///   "status": "Ok"
 /// }
 async fn check_health() -> Json<Health> {
+    // TODO: ping db and kafka infra
     Json(Health { status: Status::Ok })
 }

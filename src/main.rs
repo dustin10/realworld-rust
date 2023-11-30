@@ -1,8 +1,6 @@
-use axum::Server;
 use realworld::config::Config;
 use realworld::http;
 use sqlx::postgres::PgPoolOptions;
-use std::net::SocketAddr;
 use std::time::Duration;
 use tracing::metadata::LevelFilter;
 use tracing_subscriber::EnvFilter;
@@ -54,9 +52,10 @@ async fn main() -> anyhow::Result<()> {
     sqlx::migrate!().run(&pool).await?;
 
     // Configure the routes for the application and start the HTTP server on the configured port.
-    let api_addr = SocketAddr::try_from(([127, 0, 0, 1], config.http.port))?;
-    let http_fut =
-        Server::try_bind(&api_addr)?.serve(http::router(pool, config).into_make_service());
+    let tcp_listener =
+        tokio::net::TcpListener::bind(format!("127.0.0.1:{}", config.http.port)).await?;
+
+    let http_fut = async { axum::serve(tcp_listener, http::router(pool, config)).await };
 
     // If running on a unix system, install a handler for the terminate signal so we can cleanly
     // shutdown. If not running on a unix system then instead use a future that will never return.

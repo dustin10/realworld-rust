@@ -138,7 +138,7 @@ pub fn verify_jwt(encoded_jwt: &str, signing_key: &str) -> Result<AuthContext, E
 /// Hashes the given plain-text passsword.
 ///
 /// The hashing operation is very CPU intensive so spawn a task to be run in the rayon thread
-/// pool which is good for CPU that kind of work.
+/// pool which is good for that kind of work.
 pub async fn hash_password(password: String) -> Result<String, Error> {
     let (tx, rx) = tokio::sync::oneshot::channel();
 
