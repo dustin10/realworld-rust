@@ -28,6 +28,8 @@ async fn main() -> anyhow::Result<()> {
 
     // Convenient way to allow developers to easily override configuration during local
     // development by simply putting env variables in a .env file that is excluded from git.
+    // We also allow for a conf/local.toml file to specify local configuration as well. Both are
+    // not really necessary but show available options.
     match dotenvy::dotenv_override() {
         Ok(path) => tracing::debug!("loaded .env file from {}", path.to_string_lossy()),
         Err(e) => tracing::debug!("unable to load .env file: {}", e),
@@ -40,7 +42,8 @@ async fn main() -> anyhow::Result<()> {
 
     // Create the connection pool that will be used to interact with the backend database. In a
     // real application the user would want to tweak the available parameters based on the expected
-    // load and expose other relevant parameters through the configuration.
+    // load and expose other relevant parameters through the configuration so that they may be
+    // tweaked without a code change.
     let pool = PgPoolOptions::new()
         .max_connections(config.database.max_connections)
         .acquire_timeout(Duration::from_secs(config.database.connection_timeout))

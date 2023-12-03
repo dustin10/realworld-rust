@@ -85,7 +85,7 @@ impl FromRequestParts<AppContext> for AuthContext {
 
 /// The [`Claims`] struct represents the data contained in the claims section of the JWT.
 #[derive(Clone, Debug, Deserialize, Serialize)]
-pub struct Claims {
+struct Claims {
     /// Id of the authenticated user.
     user_id: Uuid,
     /// Time of token expiry.

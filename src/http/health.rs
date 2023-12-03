@@ -10,6 +10,10 @@ pub fn router() -> Router {
 #[derive(Debug, Serialize)]
 enum Status {
     Ok,
+    #[allow(dead_code)]
+    Warn,
+    #[allow(dead_code)]
+    Error,
 }
 
 /// The [`Health`] struct contains the result of the health check for the application.
@@ -29,6 +33,6 @@ struct Health {
 ///   "status": "Ok"
 /// }
 async fn check_health() -> Json<Health> {
-    // TODO: ping db and kafka infra
+    // TODO: ping db and kafka infra and probably just warn if unable to connect?
     Json(Health { status: Status::Ok })
 }
