@@ -1,8 +1,10 @@
-use crate::http::{
-    auth::AuthContext,
-    profile::{self, Profile},
-    tag::Tag,
-    AppContext, Error, Pagination,
+use crate::{
+    db::tag::Tag,
+    http::{
+        auth::AuthContext,
+        profile::{self, Profile},
+        AppContext, Error, Pagination,
+    },
 };
 
 use axum::{
