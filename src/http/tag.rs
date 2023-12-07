@@ -38,11 +38,7 @@ struct TagsBody {
 /// ```
 async fn list_tags(ctx: State<AppContext>) -> Result<Json<TagsBody>, Error> {
     let tags = db::tag::fetch_all_tags(&ctx.db)
-        .await
-        .map_err(|e| {
-            tracing::error!("error returned from the database: {}", e);
-            Error::from(e)
-        })?
+        .await?
         .into_iter()
         .map(|t: db::tag::Tag| t.name)
         .collect();

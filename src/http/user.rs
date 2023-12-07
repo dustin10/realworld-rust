@@ -145,7 +145,10 @@ async fn create_user(
 ) -> Result<Json<UserBody<User>>, Error> {
     let password_hash = auth::hash_password(request.user.password)
         .await
-        .map_err(|_| Error::Internal)?;
+        .map_err(|e| {
+            tracing::error!("error hashing password: {}", e);
+            Error::Internal
+        })?;
 
     let data = db::user::CreateUser {
         username: &request.user.username,
@@ -155,12 +158,12 @@ async fn create_user(
 
     // TODO: handle unique constraints
 
-    let db_user: db::user::User = db::user::create_user(&ctx.db, data).await.map_err(|e| {
-        tracing::error!("error returned from database: {}", e);
-        Error::from(e)
-    })?;
+    let db_user: db::user::User = db::user::create_user(&ctx.db, data).await?;
 
-    let token = auth::mint_jwt(db_user.id, &ctx.config.signing_key).map_err(|_| Error::Internal)?;
+    let token = auth::mint_jwt(db_user.id, &ctx.config.signing_key).map_err(|e| {
+        tracing::error!("error minting jwt: {}", e);
+        Error::Internal
+    })?;
 
     let user = User::from_db_user_with_token(db_user, token);
 
@@ -207,18 +210,21 @@ async fn login_user(
     match db::user::fetch_user_by_email(&ctx.db, &request.user.email).await? {
         None => Ok(StatusCode::UNAUTHORIZED.into_response()),
         Some(db_user) => {
-            let resp =
-                if auth::verify_password(request.user.password, db_user.password.clone()).await {
-                    let token = auth::mint_jwt(db_user.id, &ctx.config.signing_key)
-                        .map_err(|_| Error::Internal)?;
+            let resp = if auth::verify_password(request.user.password, db_user.password.clone())
+                .await
+            {
+                let token = auth::mint_jwt(db_user.id, &ctx.config.signing_key).map_err(|e| {
+                    tracing::error!("error minting jwt: {}", e);
+                    Error::Internal
+                })?;
 
-                    let user = User::from_db_user_with_token(db_user, token);
+                let user = User::from_db_user_with_token(db_user, token);
 
-                    Json(UserBody { user }).into_response()
-                } else {
-                    tracing::debug!("password verification failed for {}", request.user.email);
-                    StatusCode::UNAUTHORIZED.into_response()
-                };
+                Json(UserBody { user }).into_response()
+            } else {
+                tracing::debug!("password verification failed for {}", request.user.email);
+                StatusCode::UNAUTHORIZED.into_response()
+            };
 
             Ok(resp)
         }
@@ -323,11 +329,7 @@ async fn update_user(
 
             // TODO: handle unique constraint violations
 
-            let db_user: db::user::User =
-                db::user::update_user(&ctx.db, data).await.map_err(|e| {
-                    tracing::error!("error returned from database: {}", e);
-                    Error::from(e)
-                })?;
+            let db_user: db::user::User = db::user::update_user(&ctx.db, data).await?;
 
             // TODO: if password changes should a new token be minted?
 

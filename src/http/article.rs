@@ -1,10 +1,8 @@
 use crate::{
+    db,
     db::tag::Tag,
-    http::{
-        auth::AuthContext,
-        profile::{self, Profile},
-        AppContext, Error, Pagination,
-    },
+    db::user::Profile,
+    http::{auth::AuthContext, AppContext, Error, Pagination},
 };
 
 use axum::{
@@ -394,7 +392,7 @@ async fn user_feed(
             .map(|t: Tag| t.name)
             .collect();
 
-        let author = profile::fetch_profile_by_id(&ctx.db, &view.user_id, Some(auth_ctx.user_id))
+        let author = db::user::fetch_profile_by_id(&ctx.db, &view.user_id, Some(auth_ctx.user_id))
             .await?
             .expect("article author exists");
 
@@ -620,10 +618,13 @@ async fn create_comment(
                     Error::from(e)
                 })?;
 
-            let profile =
-                profile::fetch_profile_by_id(&ctx.db, &comment_row.user_id, Some(auth_ctx.user_id))
-                    .await?
-                    .expect("comment author should exist");
+            let profile = db::user::fetch_profile_by_id(
+                &ctx.db,
+                &comment_row.user_id,
+                Some(auth_ctx.user_id),
+            )
+            .await?
+            .expect("comment author should exist");
 
             let comment = Comment::from_row_and_profile(comment_row, profile);
 
@@ -668,7 +669,7 @@ async fn get_comments(
     let mut comments = Vec::with_capacity(comment_rows.len());
 
     for row in comment_rows {
-        let profile = profile::fetch_profile_by_id(&ctx.db, &row.user_id, user_context)
+        let profile = db::user::fetch_profile_by_id(&ctx.db, &row.user_id, user_context)
             .await?
             .expect("comment author should exist");
 
@@ -835,7 +836,7 @@ async fn fetch_article(
                 .map(|t: Tag| t.name)
                 .collect();
 
-            let author = profile::fetch_profile_by_id(db, &view.user_id, user_ctx)
+            let author = db::user::fetch_profile_by_id(db, &view.user_id, user_ctx)
                 .await?
                 .expect("authenticated user exists");
 
