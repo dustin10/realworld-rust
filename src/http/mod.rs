@@ -69,7 +69,10 @@ impl IntoResponse for Error {
     fn into_response(self) -> Response {
         match self {
             Error::Validation => StatusCode::UNPROCESSABLE_ENTITY.into_response(),
-            Error::Database { .. } => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+            Error::Database { source } => {
+                tracing::error!("database error: {}", source);
+                StatusCode::INTERNAL_SERVER_ERROR.into_response()
+            }
             Error::Internal => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
         }
     }

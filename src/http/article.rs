@@ -1,6 +1,5 @@
 use crate::{
     db,
-    db::tag::Tag,
     db::user::Profile,
     http::{auth::AuthContext, AppContext, Error, Pagination},
 };
@@ -14,92 +13,7 @@ use axum::{
 use chrono::{DateTime, Utc};
 use http::StatusCode;
 use serde::{Deserialize, Serialize};
-use sqlx::{FromRow, PgPool};
 use uuid::Uuid;
-
-/// SQL query used to fetch a single page of the article feed for a user.
-const GET_USER_FEED_PAGE_QUERY: &str = r#"
-    SELECT 
-        a.*,
-        (SELECT COUNT(af.*) FROM article_favs AS af WHERE af.article_id = a.id AND af.user_id = $1)::int::bool AS favorited,
-        (SELECT COUNT(af.*) FROM article_favs AS af WHERE af.article_id = a.id) as favorites_count
-    FROM articles AS a INNER JOIN user_follows AS uf ON a.user_id = uf.user_id
-    WHERE uf.follower_id = $1
-    ORDER BY a.created DESC
-    LIMIT $2
-    OFFSET $3"#;
-
-/// SQL query used to create a new article.
-const CREATE_ARTICLE_QUERY: &str =
-    "INSERT INTO articles (user_id, slug, title, description, body) VALUES ($1, $2, $3, $4, $5) RETURNING *";
-
-/// SQL query used to create a new tag in the database.
-const CREATE_TAG_QUERY: &str = r#"
-    INSERT INTO
-        tags (name)
-    VALUES
-        ($1)
-    ON CONFLICT(name) DO UPDATE SET name = EXCLUDED.name
-    RETURNING *"#;
-
-/// SQL query used to create the association of a tag to an article.
-const CREATE_ARTICLE_TAG_QUERY: &str =
-    "INSERT INTO article_tags (article_id, tag_id) VALUES ($1, $2)";
-
-/// SQL query used to fetch an article by slug.
-const GET_ARTICLE_BY_SLUG_QUERY: &str = "SELECT * FROM articles WHERE slug = $1";
-
-/// SQL query used to fetch a computed view of an article by slug.
-const GET_ARTICLE_VIEW_BY_SLUG_QUERY: &str = r#"
-    SELECT
-        a.*,
-        (SELECT COUNT(af.*) FROM article_favs AS af WHERE af.article_id = a.id AND af.user_id = $1)::int::bool AS favorited,
-        (SELECT COUNT(af.*) FROM article_favs AS af WHERE af.article_id = a.id) as favorites_count
-    FROM
-        articles AS a
-    WHERE
-        a.slug = $2"#;
-
-/// SQL query used to fetch the tags for an article from the database.
-const GET_TAGS_FOR_ARTICLE_QUERY: &str = r#"
-    SELECT
-        t.*
-    FROM
-        tags AS t INNER JOIN article_tags AS at ON t.id = at.tag_id
-    WHERE
-        at.article_id = $1"#;
-
-/// SQL query used to delete entries from the user favorites join table for an article.
-const DELETE_ARTICLE_FAVS_QUERY: &str = "DELETE FROM article_favs WHERE article_id = $1";
-
-/// SQL query used to delete the links from a tag to an article.
-const DELETE_ARTICLE_TAGS_QUERY: &str = "DELETE FROM article_tags WHERE article_id = $1";
-
-/// SQL query used to delete an article.
-const DELETE_ARTICLE_QUERY: &str = "DELETE FROM articles WHERE id = $1";
-
-/// SQL query used to create a new comment for an article.
-const CREATE_ARTICLE_COMMENT_QUERY: &str =
-    "INSERT INTO article_comments (user_id, article_id, body) VALUES ($1, $2, $3) RETURNING *";
-
-/// SQL query used to fetch the comments for a single article.
-const GET_ARTICLE_COMMENTS_QUERY: &str = r#"
-    SELECT ac.* 
-    FROM article_comments AS ac INNER JOIN articles AS a ON ac.article_id = a.id
-    WHERE a.slug = $1
-    ORDER BY ac.created ASC"#;
-
-/// SQL query used to delete a comment from an article.
-const DELETE_ARTICLE_COMMENT_QUERY: &str =
-    "DELETE FROM article_comments WHERE id = $1 AND user_id = $2";
-
-/// SQL query used to create an entry in the table that captures favorited articles for a user.
-const CREATE_USER_ARTICLE_FAV_QUERY: &str =
-    "INSERT INTO article_favs (article_id, user_id) VALUES ($1, $2) RETURNING *";
-
-/// SQL query used to delete the entry in the table that captures favorited articles for a user.
-const DELETE_USER_ARTICLE_FAV_QUERY: &str =
-    "DELETE FROM article_favs WHERE article_id = $1 AND user_id = $2";
 
 /// Creates the [`Router`] for the HTTP endpoints that correspond to the `article` domain and requires
 /// the [`AppContext`] to be the state type.
@@ -140,61 +54,6 @@ pub(super) fn router() -> Router<AppContext> {
         .route("/api/articles/:slug/comments/:id", delete(delete_comment))
 }
 
-/// The [`ArticleRow`] struct is used to let the `sqlx` library easily map a row from the `articles`
-/// table in the database to a struct value. It is a one-to-one mapping from the database table.
-#[derive(Debug, FromRow)]
-struct ArticleRow {
-    /// Id of the article.
-    id: Uuid,
-    /// Id of the user who authored the article.
-    user_id: Uuid,
-    /// Slugified title of the article.
-    slug: String,
-    /// Title of the article.
-    #[allow(dead_code)]
-    title: String,
-    /// Description of the article.
-    #[allow(dead_code)]
-    description: String,
-    /// Body of the article.
-    #[allow(dead_code)]
-    body: String,
-    /// Time the article was created.
-    #[allow(dead_code)]
-    created: DateTime<Utc>,
-    /// Time the article was last modified.
-    #[allow(dead_code)]
-    updated: Option<DateTime<Utc>>,
-}
-
-/// The [`ArticleView`] struct is used to let the `sqlx` library easily map a view of the `articles`
-/// table and supporting data in the database to a struct value. This is not a one-to-one mapping
-/// from the row to the struct but rather there is also some computed data returned. Hence, why the
-/// name is a view and not a row. Some may also refer to this as a projection.
-#[derive(Debug, FromRow)]
-struct ArticleView {
-    /// Id of the article.
-    id: Uuid,
-    /// Id of the article.
-    user_id: Uuid,
-    /// Slugified title of the article.
-    slug: String,
-    /// Title of the article.
-    title: String,
-    /// Description of the article.
-    description: String,
-    /// Body of the article.
-    body: String,
-    /// Time the article was created.
-    created: DateTime<Utc>,
-    /// Time the article was last modified.
-    updated: Option<DateTime<Utc>>,
-    /// Flag indicating whether the logged in user, if available, has favorited the article.
-    favorited: bool,
-    /// Count of the total number of users who have favorited the article.
-    favorites_count: i64,
-}
-
 /// The [`Article`] struct contains data that repesents an article as returned from the API. It
 /// contains the relevant article data, tag data and properties relevant to the currently
 /// authenticted user if one exists.
@@ -227,9 +86,18 @@ struct Article {
 }
 
 impl Article {
-    /// Creates a new [`Article`] with the given supporting data.
-    fn with_view_tags_and_profile(view: ArticleView, tags: Vec<String>, profile: Profile) -> Self {
-        Article {
+    /// Creates a new [`Article`] populated from the given [`crate::db::article::ArticleView`].
+    fn with_db_view(view: db::article::ArticleView) -> Self {
+        // TODO: Consider storing articles tags in an array directly on the article row in the database.
+        // Right now we send back a CSV of tags with the query result and then they are transformed into a
+        // [`Vec`] before the response is returned to the client. Having that tags in their own table
+        // allows for an easy implementation of the list tags API so that could be kept along side the
+        // text array property on the article.
+        let tags = view
+            .tags
+            .map(|csv| csv.split(',').map(ToOwned::to_owned).collect());
+
+        Self {
             slug: view.slug,
             title: view.title,
             description: view.description,
@@ -238,8 +106,13 @@ impl Article {
             updated: view.updated,
             favorited: view.favorited,
             favorites_count: view.favorites_count,
-            tags: Some(tags),
-            author: profile,
+            tags,
+            author: Profile {
+                name: view.author_name,
+                bio: view.author_bio,
+                image: view.author_image,
+                follows: view.author_followed,
+            },
         }
     }
 }
@@ -299,23 +172,6 @@ struct CreateComment {
     body: String,
 }
 
-/// The [`CommentRow`] struct is used to let the `sqlx` library easily map a row from the
-/// `comments` table in the database to a struct value.
-#[derive(Debug, FromRow)]
-struct CommentRow {
-    /// Id of the comment.
-    id: Uuid,
-    /// Id of the user who authored the comment.
-    user_id: Uuid,
-    /// Id of the article the comment was made on.
-    #[allow(dead_code)]
-    article_id: Uuid,
-    /// Body text of the comment.
-    body: String,
-    /// Time at which the comment was made.
-    created: DateTime<Utc>,
-}
-
 /// The [`Comment`] struct contains data that repesents a comment on an article made by a
 /// registered user of the application.
 #[derive(Debug, Serialize)]
@@ -332,13 +188,18 @@ struct Comment {
 }
 
 impl Comment {
-    /// Creates a new [`Comment`] given the database row and author profile.
-    fn from_row_and_profile(row: CommentRow, profile: Profile) -> Self {
+    /// Creates a new [`Comment`] from the given [`crate::db::article::CommentView`].
+    fn with_db_view(view: db::article::CommentView) -> Self {
         Self {
-            id: row.id,
-            body: row.body,
-            created: row.created,
-            author: profile,
+            id: view.id,
+            body: view.body,
+            created: view.created,
+            author: Profile {
+                name: view.author_name,
+                bio: view.author_bio,
+                image: view.author_image,
+                follows: view.author_followed,
+            },
         }
     }
 }
@@ -374,32 +235,12 @@ async fn user_feed(
     auth_ctx: AuthContext,
     page: Query<Pagination>,
 ) -> Result<Json<ArticlesBody>, Error> {
-    let article_views =
-        fetch_article_views_for_user_feed(&ctx.db, &auth_ctx.user_id, &page.0).await?;
-
-    let mut articles = Vec::with_capacity(article_views.len());
-
-    for view in article_views {
-        let tags = sqlx::query_as(GET_TAGS_FOR_ARTICLE_QUERY)
-            .bind(view.id)
-            .fetch_all(&ctx.db)
-            .await
-            .map_err(|e| {
-                tracing::error!("error returned from the database: {}", e);
-                Error::from(e)
-            })?
-            .into_iter()
-            .map(|t: Tag| t.name)
-            .collect();
-
-        let author = db::user::fetch_profile_by_id(&ctx.db, &view.user_id, Some(auth_ctx.user_id))
+    let articles =
+        db::article::query_user_feed(&ctx.db, &auth_ctx.user_id, page.0.limit, page.0.offset)
             .await?
-            .expect("article author exists");
-
-        let article = Article::with_view_tags_and_profile(view, tags, author);
-
-        articles.push(article);
-    }
+            .into_iter()
+            .map(Article::with_db_view)
+            .collect();
 
     Ok(Json(ArticlesBody { articles }))
 }
@@ -454,12 +295,18 @@ async fn create_article(
     auth_ctx: AuthContext,
     Json(request): Json<ArticleBody<CreateArticle>>,
 ) -> Result<Response, Error> {
-    let row = insert_article(&ctx.db, &auth_ctx.user_id, &request.article).await?;
+    let data = db::article::CreateArticle {
+        title: &request.article.title,
+        description: &request.article.description,
+        body: &request.article.body,
+        tags: request.article.tags.as_ref(),
+    };
 
-    match fetch_article(&ctx.db, &row.slug, None).await? {
-        None => Ok(StatusCode::NOT_FOUND.into_response()),
-        Some(article) => Ok(Json(ArticleBody { article }).into_response()),
-    }
+    let article = db::article::create_article(&ctx.db, &auth_ctx.user_id, &data)
+        .await
+        .map(Article::with_db_view)?;
+
+    Ok(Json(ArticleBody { article }).into_response())
 }
 
 /// Handles the get article by slug API endpoint at `GET /api/articles/:slug`. The handler will
@@ -503,9 +350,13 @@ async fn get_article(
 ) -> Result<Response, Error> {
     let user_ctx = auth_ctx.map(|ac| ac.user_id);
 
-    match fetch_article(&ctx.db, &slug, user_ctx).await? {
+    match db::article::query_article_view_by_slug(&ctx.db, &slug, user_ctx).await? {
         None => Ok(StatusCode::NOT_FOUND.into_response()),
-        Some(article) => Ok(Json(ArticleBody { article }).into_response()),
+        Some(db_view) => {
+            let article = Article::with_db_view(db_view);
+
+            Ok(Json(ArticleBody { article }).into_response())
+        }
     }
 }
 
@@ -519,46 +370,14 @@ async fn delete_article(
     auth_ctx: AuthContext,
     Path(slug): Path<String>,
 ) -> Result<Response, Error> {
-    match fetch_article_row_by_slug(&ctx.db, &slug).await? {
+    match db::article::query_article_by_slug(&ctx.db, &slug).await? {
         None => Ok(StatusCode::NOT_FOUND.into_response()),
         Some(article) => {
             if auth_ctx.user_id != article.user_id {
                 return Ok(StatusCode::FORBIDDEN.into_response());
             }
 
-            let mut tx = ctx.db.begin().await?;
-
-            // delete any favorites
-            let _ = sqlx::query(DELETE_ARTICLE_FAVS_QUERY)
-                .bind(article.id)
-                .execute(&mut *tx)
-                .await
-                .map_err(|e| {
-                    tracing::error!("error returned from the database: {}", e);
-                    Error::from(e)
-                })?;
-
-            // delete any tags associations
-            let _ = sqlx::query(DELETE_ARTICLE_TAGS_QUERY)
-                .bind(article.id)
-                .execute(&mut *tx)
-                .await
-                .map_err(|e| {
-                    tracing::error!("error returned from the database: {}", e);
-                    Error::from(e)
-                })?;
-
-            // finally delete the article
-            let _ = sqlx::query(DELETE_ARTICLE_QUERY)
-                .bind(article.id)
-                .execute(&mut *tx)
-                .await
-                .map_err(|e| {
-                    tracing::error!("error returned from the database: {}", e);
-                    Error::from(e)
-                })?;
-
-            tx.commit().await?;
+            db::article::delete_article_by_id(&ctx.db, &article.id).await?;
 
             Ok(StatusCode::NO_CONTENT.into_response())
         }
@@ -604,29 +423,17 @@ async fn create_comment(
     Path(slug): Path<String>,
     Json(request): Json<CommentBody<CreateComment>>,
 ) -> Result<Response, Error> {
-    match fetch_article_row_by_slug(&ctx.db, &slug).await? {
+    match db::article::query_article_by_slug(&ctx.db, &slug).await? {
         None => Ok(StatusCode::NOT_FOUND.into_response()),
-        Some(row) => {
-            let comment_row: CommentRow = sqlx::query_as(CREATE_ARTICLE_COMMENT_QUERY)
-                .bind(auth_ctx.user_id)
-                .bind(row.id)
-                .bind(&request.comment.body)
-                .fetch_one(&ctx.db)
+        Some(article) => {
+            let data = db::article::CreateComment {
+                user_id: &auth_ctx.user_id,
+                body: &request.comment.body,
+            };
+
+            let comment = db::article::add_article_comment(&ctx.db, &article.id, &data)
                 .await
-                .map_err(|e| {
-                    tracing::error!("error returned from the database: {}", e);
-                    Error::from(e)
-                })?;
-
-            let profile = db::user::fetch_profile_by_id(
-                &ctx.db,
-                &comment_row.user_id,
-                Some(auth_ctx.user_id),
-            )
-            .await?
-            .expect("comment author should exist");
-
-            let comment = Comment::from_row_and_profile(comment_row, profile);
+                .map(Comment::with_db_view)?;
 
             Ok(Json(CommentBody { comment }).into_response())
         }
@@ -659,24 +466,13 @@ async fn get_comments(
     auth_ctx: Option<AuthContext>,
     Path(slug): Path<String>,
 ) -> Result<Json<CommentsBody>, Error> {
-    let comment_rows: Vec<CommentRow> = sqlx::query_as(GET_ARTICLE_COMMENTS_QUERY)
-        .bind(slug)
-        .fetch_all(&ctx.db)
-        .await?;
+    let user_ctx = auth_ctx.map(|ac| ac.user_id);
 
-    let user_context = auth_ctx.map(|ac| ac.user_id);
-
-    let mut comments = Vec::with_capacity(comment_rows.len());
-
-    for row in comment_rows {
-        let profile = db::user::fetch_profile_by_id(&ctx.db, &row.user_id, user_context)
-            .await?
-            .expect("comment author should exist");
-
-        let comment = Comment::from_row_and_profile(row, profile);
-
-        comments.push(comment);
-    }
+    let comments = db::article::query_article_comments_by_slug(&ctx.db, &slug, user_ctx)
+        .await?
+        .into_iter()
+        .map(Comment::with_db_view)
+        .collect();
 
     Ok(Json(CommentsBody { comments }))
 }
@@ -688,16 +484,7 @@ async fn delete_comment(
     Path((_slug, id)): Path<(String, Uuid)>,
 ) -> Result<StatusCode, Error> {
     // TODO: we could do better here by checking affected rows affected and returning 404 if zero
-
-    sqlx::query(DELETE_ARTICLE_COMMENT_QUERY)
-        .bind(id)
-        .bind(auth_ctx.user_id)
-        .execute(&ctx.db)
-        .await
-        .map_err(|e| {
-            tracing::error!("error returned from the database: {}", e);
-            Error::from(e)
-        })?;
+    db::article::remove_article_comment(&ctx.db, &id, &auth_ctx.user_id).await?;
 
     Ok(StatusCode::NO_CONTENT)
 }
@@ -736,23 +523,13 @@ async fn favorite_article(
     Path(slug): Path<String>,
 ) -> Result<Response, Error> {
     // TODO: handle case where favorite entry already exists
-
-    match fetch_article_row_by_slug(&ctx.db, &slug).await? {
+    match db::article::query_article_by_slug(&ctx.db, &slug).await? {
         None => Ok(StatusCode::NOT_FOUND.into_response()),
-        Some(row) => {
-            sqlx::query(CREATE_USER_ARTICLE_FAV_QUERY)
-                .bind(row.id)
-                .bind(auth_ctx.user_id)
-                .execute(&ctx.db)
-                .await
-                .map_err(|e| {
-                    tracing::error!("error returned from the database: {}", e);
-                    Error::from(e)
-                })?;
-
-            let article = fetch_article(&ctx.db, &slug, Some(auth_ctx.user_id))
-                .await?
-                .expect("article exists");
+        Some(article) => {
+            let article =
+                db::article::add_article_favorite(&ctx.db, &article.id, &auth_ctx.user_id)
+                    .await
+                    .map(Article::with_db_view)?;
 
             Ok(Json(ArticleBody { article }).into_response())
         }
@@ -792,162 +569,15 @@ async fn unfavorite_article(
     auth_ctx: AuthContext,
     Path(slug): Path<String>,
 ) -> Result<Response, Error> {
-    match fetch_article_row_by_slug(&ctx.db, &slug).await? {
+    match db::article::query_article_by_slug(&ctx.db, &slug).await? {
         None => Ok(StatusCode::NOT_FOUND.into_response()),
-        Some(row) => {
-            sqlx::query(DELETE_USER_ARTICLE_FAV_QUERY)
-                .bind(row.id)
-                .bind(auth_ctx.user_id)
-                .execute(&ctx.db)
-                .await
-                .map_err(|e| {
-                    tracing::error!("error returned from the database: {}", e);
-                    Error::from(e)
-                })?;
-
-            let article = fetch_article(&ctx.db, &slug, Some(auth_ctx.user_id))
-                .await?
-                .expect("article exists");
+        Some(article) => {
+            let article =
+                db::article::remove_article_favorite(&ctx.db, &article.id, &auth_ctx.user_id)
+                    .await
+                    .map(Article::with_db_view)?;
 
             Ok(Json(ArticleBody { article }).into_response())
         }
     }
-}
-
-/// Retrieves the [`Article`] from the database by slug, if it exists, with the specified user
-/// context to determine favorite and profile follow status.
-async fn fetch_article(
-    db: &PgPool,
-    slug: &str,
-    user_ctx: Option<Uuid>,
-) -> Result<Option<Article>, Error> {
-    match fetch_article_view_by_slug(db, slug, user_ctx).await? {
-        None => Ok(None),
-        Some(view) => {
-            let tags = sqlx::query_as(GET_TAGS_FOR_ARTICLE_QUERY)
-                .bind(view.id)
-                .fetch_all(db)
-                .await
-                .map_err(|e| {
-                    tracing::error!("error returned from the database: {}", e);
-                    Error::from(e)
-                })?
-                .into_iter()
-                .map(|t: Tag| t.name)
-                .collect();
-
-            let author = db::user::fetch_profile_by_id(db, &view.user_id, user_ctx)
-                .await?
-                .expect("authenticated user exists");
-
-            let article = Article::with_view_tags_and_profile(view, tags, author);
-
-            Ok(Some(article))
-        }
-    }
-}
-
-/// Inserts the article as well as any tags and their assocations into the database. Returns the
-/// [`ArticleRow`] that was created in the database.
-async fn insert_article(
-    db: &PgPool,
-    user_id: &Uuid,
-    article: &CreateArticle,
-) -> Result<ArticleRow, Error> {
-    let slug = slug::slugify(&article.title);
-
-    let mut tx = db.begin().await?;
-
-    let row: ArticleRow = sqlx::query_as(CREATE_ARTICLE_QUERY)
-        .bind(user_id)
-        .bind(slug)
-        .bind(&article.title)
-        .bind(&article.description)
-        .bind(&article.body)
-        .fetch_one(&mut *tx)
-        .await
-        .map_err(|e| {
-            tracing::error!("error returned from the database: {}", e);
-            Error::from(e)
-        })?;
-
-    if let Some(tags) = &article.tags {
-        // TODO: could probably be more efficient
-        for name in tags {
-            let tag: Tag = sqlx::query_as(CREATE_TAG_QUERY)
-                .bind(name)
-                .fetch_one(&mut *tx)
-                .await
-                .map_err(|e| {
-                    tracing::error!("error returned from the database: {}", e);
-                    Error::from(e)
-                })?;
-
-            let _ = sqlx::query(CREATE_ARTICLE_TAG_QUERY)
-                .bind(row.id)
-                .bind(tag.id)
-                .execute(&mut *tx)
-                .await
-                .map_err(|e| {
-                    tracing::error!("error returned from the database: {}", e);
-                    Error::from(e)
-                })?;
-        }
-    }
-
-    tx.commit().await?;
-
-    Ok(row)
-}
-
-/// Retrives an [`ArticleRow`] from the articles table in the database identified by the given slug.
-async fn fetch_article_row_by_slug(db: &PgPool, slug: &str) -> Result<Option<ArticleRow>, Error> {
-    sqlx::query_as(GET_ARTICLE_BY_SLUG_QUERY)
-        .bind(slug)
-        .fetch_optional(db)
-        .await
-        .map_err(|e| {
-            tracing::error!("error returned from the database: {}", e);
-            Error::from(e)
-        })
-}
-
-/// Retrieves an [`ArticleView`] for an article identified by the given slug using the identifier of
-/// the authenticated user, if available, as the user context to determine if the article is favorited
-/// or not.
-async fn fetch_article_view_by_slug(
-    db: &PgPool,
-    slug: &str,
-    auth_id: Option<Uuid>,
-) -> Result<Option<ArticleView>, Error> {
-    let user_context = auth_id.unwrap_or_else(Uuid::nil);
-
-    sqlx::query_as(GET_ARTICLE_VIEW_BY_SLUG_QUERY)
-        .bind(user_context)
-        .bind(slug)
-        .fetch_optional(db)
-        .await
-        .map_err(|e| {
-            tracing::error!("error returned from the database: {}", e);
-            Error::from(e)
-        })
-}
-
-/// Retrives a [`Vec`] of [`ArticleView`]s that make up a page of articles in the feed of the
-/// specified user.
-async fn fetch_article_views_for_user_feed(
-    db: &PgPool,
-    user_id: &Uuid,
-    page: &Pagination,
-) -> Result<Vec<ArticleView>, Error> {
-    sqlx::query_as(GET_USER_FEED_PAGE_QUERY)
-        .bind(user_id)
-        .bind(page.limit)
-        .bind(page.offset)
-        .fetch_all(db)
-        .await
-        .map_err(|e| {
-            tracing::error!("error returned from the database: {}", e);
-            Error::from(e)
-        })
 }
