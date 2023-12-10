@@ -57,14 +57,6 @@ impl Database {
     }
 }
 
-/// The [`Kafka`] struct contains all of the configuration values related to producing and
-/// consuming kafka events.
-#[derive(Debug, Deserialize)]
-pub struct Kafka {
-    /// CSV of URLs used to connect to the cluster of Kafka brokers.
-    pub servers: String,
-}
-
 /// The [`Config`] struct contains all of the available application configuration.
 #[derive(Debug, Deserialize)]
 pub struct Config {
@@ -76,8 +68,6 @@ pub struct Config {
     pub http: Http,
     /// Database configuration for the application.
     pub database: Database,
-    /// Kafka configuration for the application.
-    pub kafka: Kafka,
 }
 
 impl Config {
@@ -140,8 +130,6 @@ mod tests {
         assert_eq!("postgres", config.database.name);
         assert_eq!(50, config.database.max_connections);
         assert_eq!(60, config.database.connection_timeout);
-
-        assert_eq!("localhost:29092", config.kafka.servers);
     }
 
     /// Verifies that a configured env variable correctly overrides the corresponding configuration
