@@ -88,7 +88,7 @@ const fn default_limit() -> i32 {
 /// return to the client. The values are extracted out of the query parameters in the request.
 #[derive(Debug, Deserialize)]
 struct Pagination {
-    /// Maximum number of results to return.
+    /// Maximum number of results to return for a single request.
     #[serde(default = "default_limit")]
     limit: i32,
     /// Starting offset into the entire set of results.

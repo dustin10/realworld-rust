@@ -4,6 +4,54 @@ use chrono::{DateTime, Utc};
 use sqlx::{FromRow, PgPool};
 use uuid::Uuid;
 
+/// SQL query used to fetch a page of articles allowing for filters which can be used to narrow the
+/// search results.
+const LIST_ARTICLE_VIEWS: &str = r#"
+    SELECT
+        a.*,
+        (SELECT COUNT(af.*) FROM article_favs AS af WHERE af.article_id = a.id AND af.user_id = $1)::int::bool AS favorited,
+        (SELECT COUNT(af.*) FROM article_favs AS af WHERE af.article_id = a.id) as favorites_count,
+        (ARRAY_TO_STRING(ARRAY(SELECT t.name FROM tags AS t INNER JOIN article_tags AS at ON t.id = at.tag_id WHERE at.article_id = a.id), ',')) AS tags,
+        u.name AS author_name,
+        u.bio AS author_bio,
+        u.image AS author_image,
+        (SELECT COUNT(*) FROM user_follows AS uf WHERE uf.user_id = u.id AND uf.follower_id = $1)::int::bool AS author_followed
+    FROM
+        articles AS a INNER JOIN users AS u ON a.user_id = u.id
+    WHERE
+        ($2::text IS NULL OR EXISTS(SELECT 1 FROM article_tags AS at INNER JOIN tags AS t ON at.tag_id = t.id WHERE at.article_id = a.id AND t.name = $2))
+
+        AND
+
+        ($3::text IS NULL OR u.name = $3)
+
+        AND
+
+        ($4::text IS NULL OR EXISTS(SELECT 1 FROM users AS u INNER JOIN article_favs AS af ON u.id = af.user_id WHERE af.article_id = a.id AND u.name = $4))
+    ORDER BY
+        a.created DESC
+    LIMIT
+        $5
+    OFFSET
+        $6"#;
+
+/// SQL query used to get a total count of a list articles query using the same filters.
+const COUNT_ARTICLE_VIEWS_QUERY: &str = r#"
+    SELECT
+        COUNT(a.id)
+    FROM
+        articles AS a INNER JOIN users AS u ON a.user_id = u.id
+    WHERE
+        ($1::text IS NULL OR EXISTS(SELECT 1 FROM article_tags AS at INNER JOIN tags AS t ON at.tag_id = t.id WHERE at.article_id = a.id AND t.name = $1))
+
+        AND
+
+        ($2::text IS NULL OR u.name = $2)
+
+        AND
+
+        ($3::text IS NULL OR EXISTS(SELECT 1 FROM users AS u INNER JOIN article_favs AS af ON u.id = af.user_id WHERE af.article_id = a.id AND u.name = $3))"#;
+
 /// SQL query used to fetch a single page of the article feed for a user.
 const GET_USER_FEED_PAGE_QUERY: &str = r#"
     SELECT
@@ -25,6 +73,15 @@ const GET_USER_FEED_PAGE_QUERY: &str = r#"
         $2
     OFFSET
         $3"#;
+
+/// SQL query used to get a total count of the articles in a user's feed.
+const COUNT_USER_FEED_QUERY: &str = r#"
+    SELECT
+        COUNT(a.id)
+    FROM
+        articles AS a INNER JOIN users AS u ON a.user_id = u.id INNER JOIN user_follows AS uf ON a.user_id = uf.user_id
+    WHERE
+        uf.follower_id = $1"#;
 
 /// SQL query used to create a new article.
 const CREATE_ARTICLE_QUERY: &str =
@@ -58,7 +115,7 @@ const GET_ARTICLE_VIEW_BY_SLUG_QUERY: &str = r#"
         u.image AS author_image,
         (SELECT COUNT(*) FROM user_follows AS uf WHERE uf.user_id = u.id AND uf.follower_id = $1)::int::bool AS author_followed
     FROM
-        articles AS a INNER JOIN users AS u ON a.user_id = u.id LEFT JOIN user_follows AS uf ON a.user_id = uf.user_id
+        articles AS a INNER JOIN users AS u ON a.user_id = u.id
      WHERE
         a.slug = $2"#;
 
@@ -252,6 +309,45 @@ pub struct CreateComment<'a> {
     pub body: &'a String,
 }
 
+/// Retrives a [`Vec`] of [`ArticleView`]s that make up a page of articles based on the specified
+/// filters and paging parameters.
+pub async fn query_articles(
+    db: &PgPool,
+    user_ctx: Option<Uuid>,
+    tag: Option<&String>,
+    author: Option<&String>,
+    favorited: Option<&String>,
+    limit: i32,
+    offset: i32,
+) -> Result<Vec<ArticleView>, sqlx::Error> {
+    let user_context = user_ctx.unwrap_or_else(Uuid::nil);
+
+    sqlx::query_as(LIST_ARTICLE_VIEWS)
+        .bind(user_context)
+        .bind(tag)
+        .bind(author)
+        .bind(favorited)
+        .bind(limit)
+        .bind(offset)
+        .fetch_all(db)
+        .await
+}
+
+/// Counts the total number of articles based on the set of filters specified.
+pub async fn count_articles(
+    db: &PgPool,
+    tag: Option<&String>,
+    author: Option<&String>,
+    favorited: Option<&String>,
+) -> Result<i64, sqlx::Error> {
+    sqlx::query_scalar(COUNT_ARTICLE_VIEWS_QUERY)
+        .bind(tag)
+        .bind(author)
+        .bind(favorited)
+        .fetch_one(db)
+        .await
+}
+
 /// Transactionally creates a new [`Article`] row in the database using the details contained in
 /// the given a [`CreateArticle`].
 pub async fn create_article(
@@ -340,6 +436,14 @@ pub async fn query_user_feed(
         .bind(limit)
         .bind(offset)
         .fetch_all(db)
+        .await
+}
+
+/// Counts the total number of articles in a user's feed.
+pub async fn count_user_feed(db: &PgPool, user_ctx: &Uuid) -> Result<i64, sqlx::Error> {
+    sqlx::query_scalar(COUNT_USER_FEED_QUERY)
+        .bind(user_ctx)
+        .fetch_one(db)
         .await
 }
 

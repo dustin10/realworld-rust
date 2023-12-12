@@ -38,7 +38,7 @@ use uuid::Uuid;
 pub(super) fn router() -> Router<AppContext> {
     Router::new()
         .route("/api/articles/feed", get(user_feed))
-        .route("/api/articles", post(create_article))
+        .route("/api/articles", get(list_articles).post(create_article))
         .route(
             "/api/articles/:slug",
             get(get_article).delete(delete_article),
@@ -90,12 +90,13 @@ impl Article {
     fn with_db_view(view: db::article::ArticleView) -> Self {
         // TODO: Consider storing articles tags in an array directly on the article row in the database.
         // Right now we send back a CSV of tags with the query result and then they are transformed into a
-        // [`Vec`] before the response is returned to the client. Having that tags in their own table
+        // Vec<String> before the response is returned to the client. Having that tags in their own table
         // allows for an easy implementation of the list tags API so that could be kept along side the
         // text array property on the article.
-        let tags = view
-            .tags
-            .map(|csv| csv.split(',').map(ToOwned::to_owned).collect());
+        let tags = match view.tags {
+            Some(csv) if !csv.is_empty() => Some(csv.split(',').map(ToOwned::to_owned).collect()),
+            _ => None,
+        };
 
         Self {
             slug: view.slug,
@@ -131,6 +132,9 @@ struct ArticleBody<T> {
 struct ArticlesBody {
     /// Articles that make up the response body.
     articles: Vec<Article>,
+    /// Total count of the articles matching any filters.
+    #[serde(rename = "articlesCount")]
+    articles_count: i64,
 }
 
 /// The [`CreateArticle`] struct contains the data received from the HTTP request to create a new
@@ -204,6 +208,102 @@ impl Comment {
     }
 }
 
+/// The [`ListFilters`] struct encapsulates all of the filters available to the list articles
+/// API. The axum framework can deserialize the query string parameters into an instance of
+/// the struct auto-magically for us.
+#[derive(Debug, Deserialize)]
+struct ListFilters {
+    /// Name of the tag that an article must have.
+    tag: Option<String>,
+    /// Name of the author of the article.
+    author: Option<String>,
+    /// Name of the user who favorited the article.
+    favorited: Option<String>,
+    // TODO: this would be preferable but appears to be a limitation in serde when trying to do
+    // this. A workaround is given here https://docs.rs/serde_qs/0.12.0/serde_qs/index.html#flatten-workaround
+    // so perhaps look into it at some point. Until then just duplicate the fields.
+    //#[serde(flatten)]
+    //page: Pagination,
+    /// Maximum number of results to return for a single request.
+    #[serde(default = "crate::http::default_limit")]
+    limit: i32,
+    /// Starting offset into the entire set of results.
+    #[serde(default)]
+    offset: i32,
+}
+
+/// Handles the list articles endpoint at `GET /api/articles` which returns articles ordered by
+/// created date in descending order.
+///
+/// # Query Parameters
+///
+/// The following query parameters are supported which allow the client to filter the articles
+/// returned by the API.
+///
+/// * `tag` - name of the tag associated with the article
+/// * `author` - name of the user who authored the article
+/// * `favorited` - name of the user who favorited the article
+/// * `limit` - count of the articles that should be returned in the response
+/// * `offset` - offset into the total set of results to start the current result set
+///
+/// # Response Body Format
+///
+/// ```json
+/// {
+///   "articles": [{
+///     "slug": "how-to-train-your-dragon",
+///     "title": "How to train your dragon",
+///     "description": "Ever wonder how?",
+///     "body": "It takes a Jacobian",
+///     "tagList": ["dragons", "training"],
+///     "createdAt": "2016-02-18T03:22:56.637Z",
+///     "updatedAt": "2016-02-18T03:48:35.824Z",
+///     "favorited": false,
+///     "favoritesCount": 0,
+///     "author": {
+///       "username": "jake",
+///       "bio": "I work at statefarm",
+///       "image": "https://i.stack.imgur.com/xHWG8.jpg",
+///       "following": false
+///     }
+///   }]
+/// }
+/// ```
+async fn list_articles(
+    ctx: State<AppContext>,
+    auth_ctx: Option<AuthContext>,
+    filters: Query<ListFilters>,
+) -> Result<Json<ArticlesBody>, Error> {
+    let user_ctx = auth_ctx.map(|ac| ac.user_id);
+
+    let articles = db::article::query_articles(
+        &ctx.db,
+        user_ctx,
+        filters.tag.as_ref(),
+        filters.author.as_ref(),
+        filters.favorited.as_ref(),
+        filters.limit,
+        filters.offset,
+    )
+    .await?
+    .into_iter()
+    .map(Article::with_db_view)
+    .collect();
+
+    let articles_count = db::article::count_articles(
+        &ctx.db,
+        filters.tag.as_ref(),
+        filters.author.as_ref(),
+        filters.favorited.as_ref(),
+    )
+    .await?;
+
+    Ok(Json(ArticlesBody {
+        articles,
+        articles_count,
+    }))
+}
+
 /// Handles the get user feed endpoint at `GET /api/articles/feed` which returns articles authored
 /// by users who the currently authenticted user follows.
 ///
@@ -242,7 +342,12 @@ async fn user_feed(
             .map(Article::with_db_view)
             .collect();
 
-    Ok(Json(ArticlesBody { articles }))
+    let articles_count = db::article::count_user_feed(&ctx.db, &auth_ctx.user_id).await?;
+
+    Ok(Json(ArticlesBody {
+        articles,
+        articles_count,
+    }))
 }
 
 /// Handles the create article API endpoint at `POST /api/articles`.
