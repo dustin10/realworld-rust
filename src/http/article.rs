@@ -267,6 +267,7 @@ struct ArticleEvent {
     /// Any tags that have been set on the article.
     #[serde(rename = "tagList")]
     tags: Option<Vec<String>>,
+    /// Author of the article.
     author: Author,
 }
 
@@ -285,6 +286,35 @@ impl ArticleEvent {
             author: Author {
                 id: article.author.id,
                 name: article.author.name.clone(),
+            },
+        }
+    }
+}
+
+/// The [`ArticleEvent`] struct contains event data related to an article comment that is published
+/// to Kafka when the article is created or deleted.
+#[derive(Debug, Serialize)]
+struct CommentEvent {
+    /// Id of the comment.
+    id: Uuid,
+    /// Text of the comment.
+    body: String,
+    /// Time the comment was created.
+    created: DateTime<Utc>,
+    /// Author of the comment.
+    author: Author,
+}
+
+impl CommentEvent {
+    /// Creates a new [`CommentEvent`] from the given [`Comment`].
+    fn with_comment(comment: &Comment) -> Self {
+        Self {
+            id: comment.id,
+            body: comment.body.clone(),
+            created: comment.created,
+            author: Author {
+                id: comment.author.id,
+                name: comment.author.name.clone(),
             },
         }
     }
@@ -648,6 +678,20 @@ async fn create_comment(
                 .await
                 .map(Comment::with_db_view)?;
 
+            let mut headers = HashMap::with_capacity(1);
+            headers.insert(String::from("type"), String::from("COMMENT_CREATED"));
+
+            let comment_event = CommentEvent::with_comment(&comment);
+
+            let create_outbox_entry = db::outbox::CreateOutboxEntry {
+                topic: String::from("article"),
+                partition_key: Some(article.id.to_string()),
+                headers: Some(headers),
+                payload: Some(comment_event),
+            };
+
+            let _ = db::outbox::create_outbox_entry(&mut tx, create_outbox_entry).await?;
+
             Ok(Json(CommentBody { comment }).into_response())
         }
     };
@@ -702,16 +746,35 @@ async fn get_comments(
 async fn delete_comment(
     ctx: State<AppContext>,
     auth_ctx: AuthContext,
-    Path((_slug, id)): Path<(String, Uuid)>,
-) -> Result<StatusCode, Error> {
+    Path((slug, id)): Path<(String, Uuid)>,
+) -> Result<Response, Error> {
     let mut tx = ctx.db.begin().await?;
 
-    // TODO: we could do better here by checking affected rows affected and returning 404 if zero
-    db::article::remove_article_comment(&mut tx, &id, &auth_ctx.user_id).await?;
+    let response = match db::article::query_article_by_slug(&mut tx, &slug).await? {
+        None => Ok(StatusCode::NOT_FOUND.into_response()),
+        Some(article) => {
+            // TODO: we could do better here by checking affected rows affected and returning 404 if zero
+            db::article::remove_article_comment(&mut tx, &id, &auth_ctx.user_id).await?;
+
+            let mut headers = HashMap::with_capacity(1);
+            headers.insert(String::from("type"), String::from("COMMENT_DELETED"));
+
+            let create_outbox_entry: CreateOutboxEntry<()> = db::outbox::CreateOutboxEntry {
+                topic: String::from("article"),
+                partition_key: Some(article.id.to_string()),
+                headers: Some(headers),
+                payload: None,
+            };
+
+            let _ = db::outbox::create_outbox_entry(&mut tx, create_outbox_entry).await?;
+
+            Ok(StatusCode::NO_CONTENT.into_response())
+        }
+    };
 
     tx.commit().await?;
 
-    Ok(StatusCode::NO_CONTENT)
+    response
 }
 
 /// Handles the favorite article API endpoint at `POST /api/articles/:slug/favorite`. The handler
