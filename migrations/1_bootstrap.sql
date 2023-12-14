@@ -104,3 +104,13 @@ CREATE TABLE IF NOT EXISTS article_comments (
   CONSTRAINT fk_uid FOREIGN KEY(user_id) REFERENCES users(id),
   CONSTRAINT fk_aid FOREIGN KEY(article_id) REFERENCES articles(id)
 );
+
+-- create the outbox table that allows for transactional event publishing
+CREATE TABLE IF NOT EXISTS outbox (
+  id UUID PRIMARY KEY DEFAULT UUID_GENERATE_V4(),
+  topic TEXT NOT NULL,
+  partition_key TEXT,
+  headers JSONB,
+  payload JSONB,
+  created TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+)

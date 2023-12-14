@@ -11,3 +11,5 @@ name = "postgres"
 max_connections = "50"
 connection_timeout = "60"
 
+[kafka]
+servers = "localhost:29092"
