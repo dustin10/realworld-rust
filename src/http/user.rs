@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use crate::{
     db,
     http::{auth, auth::AuthContext, AppContext, Error},
@@ -9,8 +11,10 @@ use axum::{
     routing::{get, post},
     Json, Router,
 };
+use chrono::{DateTime, Utc};
 use http::StatusCode;
 use serde::{Deserialize, Serialize};
+use uuid::Uuid;
 
 /// Creates the [`Router`] for the HTTP endpoints that correspond to the user domain and requires
 /// the [`AppContext`] to be the state type.
@@ -103,6 +107,41 @@ struct UserBody<T> {
     user: T,
 }
 
+/// The [`UserEvent`] struct contains event data related to a user that is published to Kafka
+/// when a user is created, authenticated or updated.
+#[derive(Debug, Serialize)]
+struct UserEvent {
+    /// Id of the user.
+    pub id: Uuid,
+    /// Name of the user.
+    pub name: String,
+    /// Email address of the user.
+    pub email: String,
+    /// Bio for the the user.
+    pub bio: String,
+    /// URL to the image of the user.
+    pub image: Option<String>,
+    /// Time the user was created.
+    pub created: DateTime<Utc>,
+    /// Time the user was last modified.
+    pub updated: Option<DateTime<Utc>>,
+}
+
+impl UserEvent {
+    /// Creates a new [`UserEvent`] from the given [`db::user::User`].
+    fn with_db_user(user: &db::user::User) -> Self {
+        Self {
+            id: user.id,
+            name: user.name.clone(),
+            email: user.email.clone(),
+            bio: user.bio.clone(),
+            image: user.image.clone(),
+            created: user.created,
+            updated: user.updated,
+        }
+    }
+}
+
 /// Handles the user registration API endpoint at `POST /api/users`.
 ///
 /// # Request Body Format
@@ -158,7 +197,23 @@ async fn create_user(
 
     // TODO: handle unique constraints
 
-    let db_user: db::user::User = db::user::create_user(&ctx.db, data).await?;
+    let mut tx = ctx.db.begin().await?;
+
+    let db_user: db::user::User = db::user::create_user(&mut tx, data).await?;
+
+    let user_event = UserEvent::with_db_user(&db_user);
+
+    let mut headers = HashMap::with_capacity(1);
+    headers.insert(String::from("type"), String::from("USER_CREATED"));
+
+    let create_outbox_entry = db::outbox::CreateOutboxEntry {
+        topic: String::from("user"),
+        partition_key: Some(user_event.id.to_string()),
+        headers: Some(headers),
+        payload: Some(user_event),
+    };
+
+    let _ = db::outbox::create_outbox_entry(&mut tx, create_outbox_entry).await?;
 
     let token = auth::mint_jwt(db_user.id, &ctx.config.signing_key).map_err(|e| {
         tracing::error!("error minting jwt: {}", e);
@@ -166,6 +221,8 @@ async fn create_user(
     })?;
 
     let user = User::from_db_user_with_token(db_user, token);
+
+    tx.commit().await?;
 
     Ok(Json(UserBody { user }))
 }
@@ -205,14 +262,30 @@ async fn login_user(
     ctx: State<AppContext>,
     Json(request): Json<UserBody<LoginUserRequest>>,
 ) -> Result<Response, Error> {
+    let mut tx = ctx.db.begin().await?;
+
     // if no user is found then just return UNAUTHORIZED instead of not found to prevent an
     // attacker from fishing for valid email addresses
-    match db::user::fetch_user_by_email(&ctx.db, &request.user.email).await? {
+    let response = match db::user::fetch_user_by_email(&mut tx, &request.user.email).await? {
         None => Ok(StatusCode::UNAUTHORIZED.into_response()),
         Some(db_user) => {
             let resp = if auth::verify_password(request.user.password, db_user.password.clone())
                 .await
             {
+                let user_event = UserEvent::with_db_user(&db_user);
+
+                let mut headers = HashMap::with_capacity(1);
+                headers.insert(String::from("type"), String::from("USER_AUTHENTICATED"));
+
+                let create_outbox_entry = db::outbox::CreateOutboxEntry {
+                    topic: String::from("user"),
+                    partition_key: Some(user_event.id.to_string()),
+                    headers: Some(headers),
+                    payload: Some(user_event),
+                };
+
+                let _ = db::outbox::create_outbox_entry(&mut tx, create_outbox_entry).await?;
+
                 let token = auth::mint_jwt(db_user.id, &ctx.config.signing_key).map_err(|e| {
                     tracing::error!("error minting jwt: {}", e);
                     Error::Internal
@@ -228,7 +301,11 @@ async fn login_user(
 
             Ok(resp)
         }
-    }
+    };
+
+    tx.commit().await?;
+
+    response
 }
 
 /// Handles the get current user API endpoint at `GET /api/user`. The handler will read the id of
@@ -249,14 +326,20 @@ async fn login_user(
 /// }
 /// ```
 async fn get_user(ctx: State<AppContext>, auth_ctx: AuthContext) -> Result<Response, Error> {
-    match db::user::fetch_user_by_id(&ctx.db, &auth_ctx.user_id).await? {
+    let mut tx = ctx.db.begin().await?;
+
+    let response = match db::user::fetch_user_by_id(&mut tx, &auth_ctx.user_id).await? {
         Some(db_user) => {
             let user = User::from_db_user_with_token(db_user, auth_ctx.encoded_jwt);
 
             Ok(Json(UserBody { user }).into_response())
         }
         None => Ok(StatusCode::NOT_FOUND.into_response()),
-    }
+    };
+
+    tx.commit().await?;
+
+    response
 }
 
 /// Handles the update user API endpoint at `PUT /api/users`. The handler will read the id of the
@@ -301,7 +384,9 @@ async fn update_user(
     auth_ctx: AuthContext,
     Json(request): Json<UserBody<UpdateUserRequest>>,
 ) -> Result<Response, Error> {
-    match db::user::fetch_user_by_id(&ctx.db, &auth_ctx.user_id).await? {
+    let mut tx = ctx.db.begin().await?;
+
+    let response = match db::user::fetch_user_by_id(&mut tx, &auth_ctx.user_id).await? {
         None => Ok(StatusCode::UNAUTHORIZED.into_response()),
         Some(db_user) => {
             let username = request.user.username.as_ref().unwrap_or(&db_user.name);
@@ -328,14 +413,31 @@ async fn update_user(
             };
 
             // TODO: handle unique constraint violations
-
-            let db_user: db::user::User = db::user::update_user(&ctx.db, data).await?;
-
             // TODO: if password changes should a new token be minted?
+
+            let db_user: db::user::User = db::user::update_user(&mut tx, data).await?;
+
+            let user_event = UserEvent::with_db_user(&db_user);
+
+            let mut headers = HashMap::with_capacity(1);
+            headers.insert(String::from("type"), String::from("USER_UPDATED"));
+
+            let create_outbox_entry = db::outbox::CreateOutboxEntry {
+                topic: String::from("user"),
+                partition_key: Some(user_event.id.to_string()),
+                headers: Some(headers),
+                payload: Some(user_event),
+            };
+
+            let _ = db::outbox::create_outbox_entry(&mut tx, create_outbox_entry).await?;
 
             let user = User::from_db_user_with_token(db_user, auth_ctx.encoded_jwt);
 
             Ok(Json(UserBody { user }).into_response())
         }
-    }
+    };
+
+    tx.commit().await?;
+
+    response
 }

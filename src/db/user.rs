@@ -1,6 +1,6 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use sqlx::{FromRow, PgPool};
+use sqlx::{FromRow, PgConnection};
 use uuid::Uuid;
 
 /// SQL query used to create a new user.
@@ -125,33 +125,45 @@ pub struct Profile {
 }
 
 /// Retrieves a [`User`] from the database given the id of the user.
-pub async fn fetch_user_by_id(db: &PgPool, id: &Uuid) -> Result<Option<User>, sqlx::Error> {
+pub async fn fetch_user_by_id(
+    cxn: &mut PgConnection,
+    id: &Uuid,
+) -> Result<Option<User>, sqlx::Error> {
     sqlx::query_as(GET_USER_BY_ID_QUERY)
         .bind(id)
-        .fetch_optional(db)
+        .fetch_optional(cxn)
         .await
 }
 
 /// Retrieves a [`User`] from the database given the email address of the user.
-pub async fn fetch_user_by_email(db: &PgPool, email: &str) -> Result<Option<User>, sqlx::Error> {
+pub async fn fetch_user_by_email(
+    cxn: &mut PgConnection,
+    email: &str,
+) -> Result<Option<User>, sqlx::Error> {
     sqlx::query_as(GET_USER_BY_EMAIL_QUERY)
         .bind(email)
-        .fetch_optional(db)
+        .fetch_optional(cxn)
         .await
 }
 
 /// Creates a new [`User`] row in the database using the details contained in the given [`CreateUser`].
-pub async fn create_user(db: &PgPool, data: CreateUser<'_>) -> Result<User, sqlx::Error> {
+pub async fn create_user(
+    cxn: &mut PgConnection,
+    data: CreateUser<'_>,
+) -> Result<User, sqlx::Error> {
     sqlx::query_as(CREATE_USER_QUERY)
         .bind(data.username)
         .bind(data.email)
         .bind(data.hashed_password)
-        .fetch_one(db)
+        .fetch_one(cxn)
         .await
 }
 
 /// Updates a [`User`] row in the database using the details contained in the given [`UpdateUser`].
-pub async fn update_user(db: &PgPool, data: UpdateUser<'_>) -> Result<User, sqlx::Error> {
+pub async fn update_user(
+    cxn: &mut PgConnection,
+    data: UpdateUser<'_>,
+) -> Result<User, sqlx::Error> {
     sqlx::query_as(UPDATE_USER_BY_ID_QUERY)
         .bind(data.username)
         .bind(data.email)
@@ -159,14 +171,14 @@ pub async fn update_user(db: &PgPool, data: UpdateUser<'_>) -> Result<User, sqlx
         .bind(data.image)
         .bind(data.bio)
         .bind(data.id)
-        .fetch_one(db)
+        .fetch_one(cxn)
         .await
 }
 
 /// Retrieves a [`Profile`] from the database given the name of the user that the profile
 /// represents and the id of the authenticated user if available to determine the follower context.
 pub async fn fetch_profile_by_username(
-    db: &PgPool,
+    cxn: &mut PgConnection,
     username: &str,
     auth_id: Option<Uuid>,
 ) -> Result<Option<Profile>, sqlx::Error> {
@@ -175,14 +187,14 @@ pub async fn fetch_profile_by_username(
     sqlx::query_as(GET_PROFILE_BY_USERNAME_QUERY)
         .bind(user_context)
         .bind(username)
-        .fetch_optional(db)
+        .fetch_optional(cxn)
         .await
 }
 
 /// Retrieves a [`Profile`] from the database given the id of the user that the profile
 /// represents and the id of the authenticated user if available to determine the follower context.
 pub async fn fetch_profile_by_id(
-    db: &PgPool,
+    cxn: &mut PgConnection,
     id: &Uuid,
     auth_id: Option<Uuid>,
 ) -> Result<Option<Profile>, sqlx::Error> {
@@ -191,38 +203,38 @@ pub async fn fetch_profile_by_id(
     sqlx::query_as(GET_PROFILE_BY_ID_QUERY)
         .bind(user_context)
         .bind(id)
-        .fetch_optional(db)
+        .fetch_optional(cxn)
         .await
 }
 
 /// Inserts an entry into the table that tracks profile follows for a user. Returns the updated
 /// [`Profile`] for the user that was followed in the context of the follower id.
 pub async fn add_profile_follow(
-    db: &PgPool,
+    cxn: &mut PgConnection,
     username: &str,
     follower_id: Uuid,
 ) -> Result<Option<Profile>, sqlx::Error> {
     let _ = sqlx::query(INSERT_FOLLOW_QUERY)
         .bind(username)
         .bind(follower_id)
-        .execute(db)
+        .execute(&mut *cxn)
         .await?;
 
-    fetch_profile_by_username(db, username, Some(follower_id)).await
+    fetch_profile_by_username(cxn, username, Some(follower_id)).await
 }
 
 /// Deletes an entry from the table that tracks profile follows for a user. Returns the updated
 /// [`Profile`] for the user that was unfollowed in the context of the follower id.
 pub async fn remove_profile_follow(
-    db: &PgPool,
+    cxn: &mut PgConnection,
     username: &str,
     follower_id: Uuid,
 ) -> Result<Option<Profile>, sqlx::Error> {
     let _ = sqlx::query(DELETE_FOLLOW_QUERY)
         .bind(username)
         .bind(follower_id)
-        .execute(db)
+        .execute(&mut *cxn)
         .await?;
 
-    fetch_profile_by_username(db, username, Some(follower_id)).await
+    fetch_profile_by_username(cxn, username, Some(follower_id)).await
 }

@@ -66,10 +66,16 @@ async fn get_profile(
 ) -> Result<Response, Error> {
     let auth_id = auth_ctx.map(|ac| ac.user_id);
 
-    match db::user::fetch_profile_by_username(&ctx.db, &username, auth_id).await? {
+    let mut tx = ctx.db.begin().await?;
+
+    let response = match db::user::fetch_profile_by_username(&mut tx, &username, auth_id).await? {
         None => Ok(StatusCode::NOT_FOUND.into_response()),
         Some(profile) => Ok(Json(profile).into_response()),
-    }
+    };
+
+    tx.commit().await?;
+
+    response
 }
 
 /// Handles the follow user public profile API endpoint at `POST /api/profiles/:username/follow`.
@@ -93,10 +99,16 @@ async fn follow_profile(
     ctx: State<AppContext>,
     auth_ctx: AuthContext,
 ) -> Result<Response, Error> {
-    match db::user::add_profile_follow(&ctx.db, &username, auth_ctx.user_id).await? {
+    let mut tx = ctx.db.begin().await?;
+
+    let response = match db::user::add_profile_follow(&mut tx, &username, auth_ctx.user_id).await? {
         None => Ok(StatusCode::NOT_FOUND.into_response()),
         Some(profile) => Ok(Json(profile).into_response()),
-    }
+    };
+
+    tx.commit().await?;
+
+    response
 }
 
 /// Handles the unfollow user public profile API endpoint at `POST /api/profiles/:username/unfollow`.
@@ -120,8 +132,15 @@ async fn unfollow_profile(
     ctx: State<AppContext>,
     auth_ctx: AuthContext,
 ) -> Result<Response, Error> {
-    match db::user::remove_profile_follow(&ctx.db, &username, auth_ctx.user_id).await? {
-        None => Ok(StatusCode::NOT_FOUND.into_response()),
-        Some(profile) => Ok(Json(profile).into_response()),
-    }
+    let mut tx = ctx.db.begin().await?;
+
+    let response =
+        match db::user::remove_profile_follow(&mut tx, &username, auth_ctx.user_id).await? {
+            None => Ok(StatusCode::NOT_FOUND.into_response()),
+            Some(profile) => Ok(Json(profile).into_response()),
+        };
+
+    tx.commit().await?;
+
+    response
 }

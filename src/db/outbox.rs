@@ -26,6 +26,9 @@ pub struct OutboxEntry {
     pub created: DateTime<Utc>,
 }
 
+/// The [`CreateOutboxEntry`] struct contains the data required to create a row in the `outbox`
+/// table in the database that will later be transformed into an event that is submitted to a Kafka
+/// topic.
 #[derive(Debug)]
 pub struct CreateOutboxEntry<P: Serialize> {
     /// Name of the Kafka topic to publish the event on.
