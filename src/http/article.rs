@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use crate::{
     db,
-    db::user::Profile,
+    db::{outbox::CreateOutboxEntry, user::Profile},
     http::{auth::AuthContext, AppContext, Error, Pagination},
 };
 
@@ -574,6 +574,18 @@ async fn delete_article(
 
             db::article::delete_article_by_id(&mut tx, &article.id).await?;
 
+            let mut headers = HashMap::with_capacity(1);
+            headers.insert(String::from("type"), String::from("ARTICLE_DELETED"));
+
+            let create_outbox_entry: CreateOutboxEntry<String> = db::outbox::CreateOutboxEntry {
+                topic: String::from("article"),
+                partition_key: Some(article.id.to_string()),
+                headers: Some(headers),
+                payload: None,
+            };
+
+            let _ = db::outbox::create_outbox_entry(&mut tx, create_outbox_entry).await?;
+
             Ok(StatusCode::NO_CONTENT.into_response())
         }
     };
@@ -603,7 +615,7 @@ async fn delete_article(
 ///
 /// ```json
 /// {
-///   "comment": {
+///   "comment":
 ///     "id": 1,
 ///     "createdAt": "2016-02-18T03:22:56.637Z",
 ///     "body": "It takes a Jacobian",
