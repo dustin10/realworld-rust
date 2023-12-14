@@ -111,6 +111,6 @@ CREATE TABLE IF NOT EXISTS outbox (
   topic TEXT NOT NULL,
   partition_key TEXT,
   headers JSONB,
-  payload JSONB,
-  created TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-)
+  payload TEXT,
+  created TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);

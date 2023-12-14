@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use crate::{
     db,
     db::user::Profile,
@@ -59,6 +61,9 @@ pub(super) fn router() -> Router<AppContext> {
 /// authenticted user if one exists.
 #[derive(Debug, Serialize)]
 struct Article {
+    /// Id of the article.
+    #[serde(skip_serializing)]
+    id: Uuid,
     /// Slugified title of the article.
     slug: String,
     /// Title of the article.
@@ -99,6 +104,7 @@ impl Article {
         };
 
         Self {
+            id: view.id,
             slug: view.slug,
             title: view.title,
             description: view.description,
@@ -109,6 +115,7 @@ impl Article {
             favorites_count: view.favorites_count,
             tags,
             author: Profile {
+                id: view.author_id,
                 name: view.author_name,
                 bio: view.author_bio,
                 image: view.author_image,
@@ -199,6 +206,7 @@ impl Comment {
             body: view.body,
             created: view.created,
             author: Profile {
+                id: view.author_id,
                 name: view.author_name,
                 bio: view.author_bio,
                 image: view.author_image,
@@ -230,6 +238,56 @@ struct ListFilters {
     /// Starting offset into the entire set of results.
     #[serde(default)]
     offset: i32,
+}
+
+#[derive(Debug, Serialize)]
+struct Author {
+    id: Uuid,
+    name: String,
+}
+
+/// The [`ArticleEvent`] struct contains event data related to an article that is published to Kafka
+/// when the article is created, updated or deleted.
+#[derive(Debug, Serialize)]
+struct ArticleEvent {
+    /// Id of the article.
+    id: Uuid,
+    /// Slugified title of the article.
+    slug: String,
+    /// Title of the article.
+    title: String,
+    /// Description of the article.
+    description: String,
+    /// Body of the article.
+    body: String,
+    /// Time the article was created.
+    created: DateTime<Utc>,
+    /// Time the article was last modified.
+    updated: Option<DateTime<Utc>>,
+    /// Any tags that have been set on the article.
+    #[serde(rename = "tagList")]
+    tags: Option<Vec<String>>,
+    author: Author,
+}
+
+impl ArticleEvent {
+    /// Creates a new [`ArticleEvent`] from the data in the given [`Article`].
+    fn with_article(article: &Article) -> Self {
+        Self {
+            id: article.id,
+            slug: article.slug.clone(),
+            title: article.title.clone(),
+            description: article.description.clone(),
+            body: article.body.clone(),
+            created: article.created,
+            updated: article.updated,
+            tags: article.tags.clone(),
+            author: Author {
+                id: article.author.id,
+                name: article.author.name.clone(),
+            },
+        }
+    }
 }
 
 /// Handles the list articles endpoint at `GET /api/articles` which returns articles ordered by
@@ -276,8 +334,10 @@ async fn list_articles(
 ) -> Result<Json<ArticlesBody>, Error> {
     let user_ctx = auth_ctx.map(|ac| ac.user_id);
 
+    let mut tx = ctx.db.begin().await?;
+
     let articles = db::article::query_articles(
-        &ctx.db,
+        &mut tx,
         user_ctx,
         filters.tag.as_ref(),
         filters.author.as_ref(),
@@ -291,7 +351,7 @@ async fn list_articles(
     .collect();
 
     let articles_count = db::article::count_articles(
-        &ctx.db,
+        &mut tx,
         filters.tag.as_ref(),
         filters.author.as_ref(),
         filters.favorited.as_ref(),
@@ -335,14 +395,18 @@ async fn user_feed(
     auth_ctx: AuthContext,
     page: Query<Pagination>,
 ) -> Result<Json<ArticlesBody>, Error> {
+    let mut tx = ctx.db.begin().await?;
+
     let articles =
-        db::article::query_user_feed(&ctx.db, &auth_ctx.user_id, page.0.limit, page.0.offset)
+        db::article::query_user_feed(&mut tx, &auth_ctx.user_id, page.0.limit, page.0.offset)
             .await?
             .into_iter()
             .map(Article::with_db_view)
             .collect();
 
-    let articles_count = db::article::count_user_feed(&ctx.db, &auth_ctx.user_id).await?;
+    let articles_count = db::article::count_user_feed(&mut tx, &auth_ctx.user_id).await?;
+
+    tx.commit().await?;
 
     Ok(Json(ArticlesBody {
         articles,
@@ -400,16 +464,34 @@ async fn create_article(
     auth_ctx: AuthContext,
     Json(request): Json<ArticleBody<CreateArticle>>,
 ) -> Result<Response, Error> {
-    let data = db::article::CreateArticle {
+    let create_article = db::article::CreateArticle {
         title: &request.article.title,
         description: &request.article.description,
         body: &request.article.body,
         tags: request.article.tags.as_ref(),
     };
 
-    let article = db::article::create_article(&ctx.db, &auth_ctx.user_id, &data)
+    let mut tx = ctx.db.begin().await?;
+
+    let article = db::article::create_article(&mut tx, &auth_ctx.user_id, &create_article)
         .await
         .map(Article::with_db_view)?;
+
+    let article_event = ArticleEvent::with_article(&article);
+
+    let mut headers = HashMap::with_capacity(1);
+    headers.insert(String::from("type"), String::from("ARTICLE_CREATED"));
+
+    let create_outbox_entry = db::outbox::CreateOutboxEntry {
+        topic: String::from("article"),
+        partition_key: Some(article_event.id.to_string()),
+        headers: Some(headers),
+        payload: Some(article_event),
+    };
+
+    let _ = db::outbox::create_outbox_entry(&mut tx, create_outbox_entry).await?;
+
+    tx.commit().await?;
 
     Ok(Json(ArticleBody { article }).into_response())
 }
@@ -455,14 +537,20 @@ async fn get_article(
 ) -> Result<Response, Error> {
     let user_ctx = auth_ctx.map(|ac| ac.user_id);
 
-    match db::article::query_article_view_by_slug(&ctx.db, &slug, user_ctx).await? {
+    let mut tx = ctx.db.begin().await?;
+
+    let response = match db::article::query_article_view_by_slug(&mut tx, &slug, user_ctx).await? {
         None => Ok(StatusCode::NOT_FOUND.into_response()),
         Some(db_view) => {
             let article = Article::with_db_view(db_view);
 
             Ok(Json(ArticleBody { article }).into_response())
         }
-    }
+    };
+
+    tx.commit().await?;
+
+    response
 }
 
 /// Handles the delete article by slug API endpoint at `DELETE /api/articles/:slug`. The handler
@@ -475,18 +563,24 @@ async fn delete_article(
     auth_ctx: AuthContext,
     Path(slug): Path<String>,
 ) -> Result<Response, Error> {
-    match db::article::query_article_by_slug(&ctx.db, &slug).await? {
+    let mut tx = ctx.db.begin().await?;
+
+    let response = match db::article::query_article_by_slug(&mut tx, &slug).await? {
         None => Ok(StatusCode::NOT_FOUND.into_response()),
         Some(article) => {
             if auth_ctx.user_id != article.user_id {
                 return Ok(StatusCode::FORBIDDEN.into_response());
             }
 
-            db::article::delete_article_by_id(&ctx.db, &article.id).await?;
+            db::article::delete_article_by_id(&mut tx, &article.id).await?;
 
             Ok(StatusCode::NO_CONTENT.into_response())
         }
-    }
+    };
+
+    tx.commit().await?;
+
+    response
 }
 
 /// Handles the create article comment API endpoint at `POST /api/articles/:slug/comments`.
@@ -528,7 +622,9 @@ async fn create_comment(
     Path(slug): Path<String>,
     Json(request): Json<CommentBody<CreateComment>>,
 ) -> Result<Response, Error> {
-    match db::article::query_article_by_slug(&ctx.db, &slug).await? {
+    let mut tx = ctx.db.begin().await?;
+
+    let response = match db::article::query_article_by_slug(&mut tx, &slug).await? {
         None => Ok(StatusCode::NOT_FOUND.into_response()),
         Some(article) => {
             let data = db::article::CreateComment {
@@ -536,13 +632,17 @@ async fn create_comment(
                 body: &request.comment.body,
             };
 
-            let comment = db::article::add_article_comment(&ctx.db, &article.id, &data)
+            let comment = db::article::add_article_comment(&mut tx, &article.id, &data)
                 .await
                 .map(Comment::with_db_view)?;
 
             Ok(Json(CommentBody { comment }).into_response())
         }
-    }
+    };
+
+    tx.commit().await?;
+
+    response
 }
 
 /// Handles the get article comments API endpoint at `GET /api/articles/:slug/comments`. If there
@@ -573,11 +673,15 @@ async fn get_comments(
 ) -> Result<Json<CommentsBody>, Error> {
     let user_ctx = auth_ctx.map(|ac| ac.user_id);
 
-    let comments = db::article::query_article_comments_by_slug(&ctx.db, &slug, user_ctx)
+    let mut tx = ctx.db.begin().await?;
+
+    let comments = db::article::query_article_comments_by_slug(&mut tx, &slug, user_ctx)
         .await?
         .into_iter()
         .map(Comment::with_db_view)
         .collect();
+
+    tx.commit().await?;
 
     Ok(Json(CommentsBody { comments }))
 }
@@ -588,8 +692,12 @@ async fn delete_comment(
     auth_ctx: AuthContext,
     Path((_slug, id)): Path<(String, Uuid)>,
 ) -> Result<StatusCode, Error> {
+    let mut tx = ctx.db.begin().await?;
+
     // TODO: we could do better here by checking affected rows affected and returning 404 if zero
-    db::article::remove_article_comment(&ctx.db, &id, &auth_ctx.user_id).await?;
+    db::article::remove_article_comment(&mut tx, &id, &auth_ctx.user_id).await?;
+
+    tx.commit().await?;
 
     Ok(StatusCode::NO_CONTENT)
 }
@@ -627,18 +735,24 @@ async fn favorite_article(
     auth_ctx: AuthContext,
     Path(slug): Path<String>,
 ) -> Result<Response, Error> {
+    let mut tx = ctx.db.begin().await?;
+
     // TODO: handle case where favorite entry already exists
-    match db::article::query_article_by_slug(&ctx.db, &slug).await? {
+    let response = match db::article::query_article_by_slug(&mut tx, &slug).await? {
         None => Ok(StatusCode::NOT_FOUND.into_response()),
         Some(article) => {
             let article =
-                db::article::add_article_favorite(&ctx.db, &article.id, &auth_ctx.user_id)
+                db::article::add_article_favorite(&mut tx, &article.id, &auth_ctx.user_id)
                     .await
                     .map(Article::with_db_view)?;
 
             Ok(Json(ArticleBody { article }).into_response())
         }
-    }
+    };
+
+    tx.commit().await?;
+
+    response
 }
 
 /// Handles the unfavorite article API endpoint at `DELETE /api/articles/:slug/favorite`. The handler
@@ -674,15 +788,21 @@ async fn unfavorite_article(
     auth_ctx: AuthContext,
     Path(slug): Path<String>,
 ) -> Result<Response, Error> {
-    match db::article::query_article_by_slug(&ctx.db, &slug).await? {
+    let mut tx = ctx.db.begin().await?;
+
+    let response = match db::article::query_article_by_slug(&mut tx, &slug).await? {
         None => Ok(StatusCode::NOT_FOUND.into_response()),
         Some(article) => {
             let article =
-                db::article::remove_article_favorite(&ctx.db, &article.id, &auth_ctx.user_id)
+                db::article::remove_article_favorite(&mut tx, &article.id, &auth_ctx.user_id)
                     .await
                     .map(Article::with_db_view)?;
 
             Ok(Json(ArticleBody { article }).into_response())
         }
-    }
+    };
+
+    tx.commit().await?;
+
+    response
 }

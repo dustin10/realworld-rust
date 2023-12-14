@@ -20,6 +20,7 @@ const UPDATE_USER_BY_ID_QUERY: &str =
 /// SQL query used to fetch a profile by the name of the user.
 const GET_PROFILE_BY_USERNAME_QUERY: &str = r#"
     SELECT
+        u.id,
         u.name,
         u.bio,
         u.image,
@@ -32,6 +33,7 @@ const GET_PROFILE_BY_USERNAME_QUERY: &str = r#"
 /// SQL query used to fetch a profile by the id of the user.
 const GET_PROFILE_BY_ID_QUERY: &str = r#"
     SELECT
+        u.id,
         u.name,
         u.bio,
         u.image,
@@ -103,10 +105,13 @@ pub struct UpdateUser<'a> {
     pub image: Option<&'a String>,
 }
 
-/// The [`Profile`] struct contains the details of the public profile for a user of the
-/// application and whether the currently authenticated user, if one exists, follows the profile.
+/// The [`Profile`] struct is used to let the `sqlx` library easily map the projection of a user
+/// profile to a struct value.
 #[derive(Debug, Deserialize, Serialize, FromRow)]
 pub struct Profile {
+    /// Id of the user the profile represents.
+    #[serde(skip_serializing)]
+    pub id: Uuid,
     /// Username of the profile.
     #[serde(rename = "username")]
     pub name: String,

@@ -1,7 +1,8 @@
 use crate::db::tag::Tag;
 
 use chrono::{DateTime, Utc};
-use sqlx::{FromRow, PgPool};
+use serde::Serialize;
+use sqlx::{FromRow, PgConnection};
 use uuid::Uuid;
 
 /// SQL query used to fetch a page of articles allowing for filters which can be used to narrow the
@@ -12,6 +13,7 @@ const LIST_ARTICLE_VIEWS: &str = r#"
         (SELECT COUNT(af.*) FROM article_favs AS af WHERE af.article_id = a.id AND af.user_id = $1)::int::bool AS favorited,
         (SELECT COUNT(af.*) FROM article_favs AS af WHERE af.article_id = a.id) as favorites_count,
         (ARRAY_TO_STRING(ARRAY(SELECT t.name FROM tags AS t INNER JOIN article_tags AS at ON t.id = at.tag_id WHERE at.article_id = a.id), ',')) AS tags,
+        u.id AS author_id,
         u.name AS author_name,
         u.bio AS author_bio,
         u.image AS author_image,
@@ -59,6 +61,7 @@ const GET_USER_FEED_PAGE_QUERY: &str = r#"
         (SELECT COUNT(af.*) FROM article_favs AS af WHERE af.article_id = a.id AND af.user_id = $1)::int::bool AS favorited,
         (SELECT COUNT(af.*) FROM article_favs AS af WHERE af.article_id = a.id) as favorites_count,
         (ARRAY_TO_STRING(ARRAY(SELECT t.name FROM tags AS t INNER JOIN article_tags AS at ON t.id = at.tag_id WHERE at.article_id = a.id), ',')) AS tags,
+        u.id AS author_id,
         u.name AS author_name,
         u.bio AS author_bio,
         u.image AS author_image,
@@ -110,6 +113,7 @@ const GET_ARTICLE_VIEW_BY_SLUG_QUERY: &str = r#"
         (SELECT COUNT(af.*) FROM article_favs AS af WHERE af.article_id = a.id AND af.user_id = $1)::int::bool AS favorited,
         (SELECT COUNT(af.*) FROM article_favs AS af WHERE af.article_id = a.id) as favorites_count,
         (ARRAY_TO_STRING(ARRAY(SELECT t.name FROM tags AS t INNER JOIN article_tags AS at ON t.id = at.tag_id WHERE at.article_id = a.id), ',')) AS tags,
+        u.id AS author_id,
         u.name AS author_name,
         u.bio AS author_bio,
         u.image AS author_image,
@@ -139,6 +143,7 @@ const CREATE_ARTICLE_COMMENT_QUERY: &str = r#"
         ic.article_id,
         ic.body,
         ic.created,
+        u.id AS author_id,
         u.name AS author_name,
         u.bio AS author_bio,
         u.image AS author_image,
@@ -154,6 +159,7 @@ const DELETE_ARTICLE_COMMENT_QUERY: &str =
 const GET_ARTICLE_COMMENTS_BY_SLUG_QUERY: &str = r#"
     SELECT
         ac.*,
+        u.id AS author_id,
         u.name AS author_name,
         u.bio AS author_bio,
         u.image AS author_image,
@@ -185,7 +191,7 @@ const DELETE_USER_ARTICLE_FAV_QUERY: &str = r#"
 
 /// The [`Article`] struct is used to let the `sqlx` library easily map a row from the `articles`
 /// table in the database to a struct value. It is a one-to-one mapping from the database table.
-#[derive(Debug, FromRow)]
+#[derive(Debug, FromRow, Serialize)]
 pub struct Article {
     /// Id of the article.
     pub id: Uuid,
@@ -217,6 +223,8 @@ pub struct Article {
 /// name view. Some people may also refer to this as a projection.
 #[derive(Debug, FromRow)]
 pub struct ArticleView {
+    /// Id of the article.
+    pub id: Uuid,
     /// Slugified title of the article.
     pub slug: String,
     /// Title of the article.
@@ -235,6 +243,8 @@ pub struct ArticleView {
     pub favorited: bool,
     /// Count of the total number of users who have favorited the article.
     pub favorites_count: i64,
+    /// Id of the author.
+    pub author_id: Uuid,
     /// Username of the author.
     pub author_name: String,
     /// Bio for the the author.
@@ -288,6 +298,8 @@ pub struct CommentView {
     pub body: String,
     /// Time at which the comment was made.
     pub created: DateTime<Utc>,
+    /// Id of the author.
+    pub author_id: Uuid,
     /// Username of the author.
     pub author_name: String,
     /// Bio for the the author.
@@ -312,7 +324,7 @@ pub struct CreateComment<'a> {
 /// Retrives a [`Vec`] of [`ArticleView`]s that make up a page of articles based on the specified
 /// filters and paging parameters.
 pub async fn query_articles(
-    db: &PgPool,
+    cxn: &mut PgConnection,
     user_ctx: Option<Uuid>,
     tag: Option<&String>,
     author: Option<&String>,
@@ -329,13 +341,13 @@ pub async fn query_articles(
         .bind(favorited)
         .bind(limit)
         .bind(offset)
-        .fetch_all(db)
+        .fetch_all(&mut *cxn)
         .await
 }
 
 /// Counts the total number of articles based on the set of filters specified.
 pub async fn count_articles(
-    db: &PgPool,
+    cxn: &mut PgConnection,
     tag: Option<&String>,
     author: Option<&String>,
     favorited: Option<&String>,
@@ -344,14 +356,14 @@ pub async fn count_articles(
         .bind(tag)
         .bind(author)
         .bind(favorited)
-        .fetch_one(db)
+        .fetch_one(&mut *cxn)
         .await
 }
 
-/// Transactionally creates a new [`Article`] row in the database using the details contained in
-/// the given a [`CreateArticle`].
+/// Creates a new [`Article`] row in the database using the details contained in the given
+/// [`CreateArticle`].
 pub async fn create_article(
-    db: &PgPool,
+    cxn: &mut PgConnection,
     user_id: &Uuid,
     article: &CreateArticle<'_>,
 ) -> Result<ArticleView, sqlx::Error> {
@@ -361,15 +373,13 @@ pub async fn create_article(
     // avoid these collisions.
     let slug = slug::slugify(article.title);
 
-    let mut tx = db.begin().await?;
-
     let row: Article = sqlx::query_as(CREATE_ARTICLE_QUERY)
         .bind(user_id)
         .bind(slug)
         .bind(article.title)
         .bind(article.description)
         .bind(article.body)
-        .fetch_one(&mut *tx)
+        .fetch_one(&mut *cxn)
         .await?;
 
     if let Some(tags) = article.tags {
@@ -377,32 +387,30 @@ pub async fn create_article(
         for name in tags {
             let tag: Tag = sqlx::query_as(CREATE_TAG_QUERY)
                 .bind(name)
-                .fetch_one(&mut *tx)
+                .fetch_one(&mut *cxn)
                 .await?;
 
             let _ = sqlx::query(CREATE_ARTICLE_TAG_QUERY)
                 .bind(row.id)
                 .bind(tag.id)
-                .execute(&mut *tx)
+                .execute(&mut *cxn)
                 .await?;
         }
     }
 
-    tx.commit().await?;
-
-    query_article_view_by_slug(db, &row.slug, None)
+    query_article_view_by_slug(cxn, &row.slug, None)
         .await
         .map(|av| av.expect("article should exist"))
 }
 
 /// Retrieves an [`Article`] identified by the given slug, if it exists.
 pub async fn query_article_by_slug(
-    db: &PgPool,
+    cxn: &mut PgConnection,
     slug: &str,
 ) -> Result<Option<Article>, sqlx::Error> {
     sqlx::query_as(GET_ARTICLE_BY_SLUG_QUERY)
         .bind(slug)
-        .fetch_optional(db)
+        .fetch_optional(&mut *cxn)
         .await
 }
 
@@ -410,7 +418,7 @@ pub async fn query_article_by_slug(
 /// identifier of the authenticated user, if available, as the user context to determine
 /// if the article is favorited or not.
 pub async fn query_article_view_by_slug(
-    db: &PgPool,
+    cxn: &mut PgConnection,
     slug: &str,
     user_ctx: Option<Uuid>,
 ) -> Result<Option<ArticleView>, sqlx::Error> {
@@ -419,14 +427,14 @@ pub async fn query_article_view_by_slug(
     sqlx::query_as(GET_ARTICLE_VIEW_BY_SLUG_QUERY)
         .bind(user_context)
         .bind(slug)
-        .fetch_optional(db)
+        .fetch_optional(cxn)
         .await
 }
 
 /// Retrives a [`Vec`] of [`ArticleView`]s that make up a page of articles in the feed of the
 /// specified user.
 pub async fn query_user_feed(
-    db: &PgPool,
+    cxn: &mut PgConnection,
     user_ctx: &Uuid,
     limit: i32,
     offset: i32,
@@ -435,47 +443,48 @@ pub async fn query_user_feed(
         .bind(user_ctx)
         .bind(limit)
         .bind(offset)
-        .fetch_all(db)
+        .fetch_all(&mut *cxn)
         .await
 }
 
 /// Counts the total number of articles in a user's feed.
-pub async fn count_user_feed(db: &PgPool, user_ctx: &Uuid) -> Result<i64, sqlx::Error> {
+pub async fn count_user_feed(cxn: &mut PgConnection, user_ctx: &Uuid) -> Result<i64, sqlx::Error> {
     sqlx::query_scalar(COUNT_USER_FEED_QUERY)
         .bind(user_ctx)
-        .fetch_one(db)
+        .fetch_one(&mut *cxn)
         .await
 }
 
-/// Transactionally deletes an [`Article`] and any existing relational data given the identifier.
-pub async fn delete_article_by_id(db: &PgPool, article_id: &Uuid) -> Result<(), sqlx::Error> {
-    let mut tx = db.begin().await?;
-
+/// Deletes an [`Article`] and any existing relational data given the identifier.
+pub async fn delete_article_by_id(
+    cxn: &mut PgConnection,
+    article_id: &Uuid,
+) -> Result<(), sqlx::Error> {
     // delete any favorites
     let _ = sqlx::query(DELETE_ARTICLE_FAVS_QUERY)
         .bind(article_id)
-        .execute(&mut *tx)
+        .execute(&mut *cxn)
         .await?;
 
     // delete any tags associations
     let _ = sqlx::query(DELETE_ARTICLE_TAGS_QUERY)
         .bind(article_id)
-        .execute(&mut *tx)
+        .execute(&mut *cxn)
         .await?;
 
     // finally delete the article
     let _ = sqlx::query(DELETE_ARTICLE_QUERY)
         .bind(article_id)
-        .execute(&mut *tx)
+        .execute(&mut *cxn)
         .await?;
 
-    tx.commit().await
+    Ok(())
 }
 
 /// Inserts an entry into the article comments table. Returns the [`CommentView`] that represnts
 /// the newly created comment.
 pub async fn add_article_comment(
-    db: &PgPool,
+    cxn: &mut PgConnection,
     article_id: &Uuid,
     comment: &CreateComment<'_>,
 ) -> Result<CommentView, sqlx::Error> {
@@ -483,21 +492,21 @@ pub async fn add_article_comment(
         .bind(comment.user_id)
         .bind(article_id)
         .bind(comment.body)
-        .fetch_one(db)
+        .fetch_one(&mut *cxn)
         .await
 }
 
 /// Deletes an the entry from the article comments table that matches the comment and user
 /// identifiers.
 pub async fn remove_article_comment(
-    db: &PgPool,
+    cxn: &mut PgConnection,
     comment_id: &Uuid,
     user_id: &Uuid,
 ) -> Result<(), sqlx::Error> {
     sqlx::query(DELETE_ARTICLE_COMMENT_QUERY)
         .bind(comment_id)
         .bind(user_id)
-        .execute(db)
+        .execute(&mut *cxn)
         .await
         .map(|_| ())
 }
@@ -506,7 +515,7 @@ pub async fn remove_article_comment(
 /// using the identifier of the authenticated user, if available, as the user context to determine
 /// if the author followed status.
 pub async fn query_article_comments_by_slug(
-    db: &PgPool,
+    cxn: &mut PgConnection,
     slug: &str,
     user_ctx: Option<Uuid>,
 ) -> Result<Vec<CommentView>, sqlx::Error> {
@@ -515,7 +524,7 @@ pub async fn query_article_comments_by_slug(
     sqlx::query_as(GET_ARTICLE_COMMENTS_BY_SLUG_QUERY)
         .bind(user_context)
         .bind(slug)
-        .fetch_all(db)
+        .fetch_all(&mut *cxn)
         .await
 }
 
@@ -529,17 +538,17 @@ struct SlugW {
 /// Inserts an entry into the table that tracks favorited articles for a user and returns the
 /// [`ArticleView`] of the newly favorited article.
 pub async fn add_article_favorite(
-    db: &PgPool,
+    cxn: &mut PgConnection,
     article_id: &Uuid,
     user_id: &Uuid,
 ) -> Result<ArticleView, sqlx::Error> {
     let slug: SlugW = sqlx::query_as(CREATE_USER_ARTICLE_FAV_QUERY)
         .bind(article_id)
         .bind(user_id)
-        .fetch_one(db)
+        .fetch_one(&mut *cxn)
         .await?;
 
-    query_article_view_by_slug(db, &slug.slug, Some(*user_id))
+    query_article_view_by_slug(cxn, &slug.slug, Some(*user_id))
         .await
         .map(|av| av.expect("article should exist"))
 }
@@ -547,17 +556,17 @@ pub async fn add_article_favorite(
 /// Deletes an entry from the table that tracks favorited articles for a user and returns the
 /// [`ArticleView`] of the newly unfavorited article.
 pub async fn remove_article_favorite(
-    db: &PgPool,
+    cxn: &mut PgConnection,
     article_id: &Uuid,
     user_id: &Uuid,
 ) -> Result<ArticleView, sqlx::Error> {
     let slug: SlugW = sqlx::query_as(DELETE_USER_ARTICLE_FAV_QUERY)
         .bind(article_id)
         .bind(user_id)
-        .fetch_one(db)
+        .fetch_one(&mut *cxn)
         .await?;
 
-    query_article_view_by_slug(db, &slug.slug, Some(*user_id))
+    query_article_view_by_slug(cxn, &slug.slug, Some(*user_id))
         .await
         .map(|av| av.expect("article should exist"))
 }
