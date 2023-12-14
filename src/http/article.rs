@@ -577,7 +577,7 @@ async fn delete_article(
             let mut headers = HashMap::with_capacity(1);
             headers.insert(String::from("type"), String::from("ARTICLE_DELETED"));
 
-            let create_outbox_entry: CreateOutboxEntry<String> = db::outbox::CreateOutboxEntry {
+            let create_outbox_entry: CreateOutboxEntry<()> = db::outbox::CreateOutboxEntry {
                 topic: String::from("article"),
                 partition_key: Some(article.id.to_string()),
                 headers: Some(headers),
