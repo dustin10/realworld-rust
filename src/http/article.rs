@@ -320,6 +320,25 @@ impl CommentEvent {
     }
 }
 
+/// The [`FavoriteEvent`] struct contains event data related to an article being favorited or
+/// unfavorited that is published to Kafka when the action occurs.
+#[derive(Debug, Serialize)]
+struct FavoriteEvent {
+    /// Id of the user who took the action.
+    user_id: Uuid,
+    /// Details of the article that was acted on.
+    article: ArticleEvent,
+}
+
+impl FavoriteEvent {
+    fn with_user_and_article(user_id: Uuid, article: &Article) -> Self {
+        Self {
+            user_id,
+            article: ArticleEvent::with_article(article),
+        }
+    }
+}
+
 /// Handles the list articles endpoint at `GET /api/articles` which returns articles ordered by
 /// created date in descending order.
 ///
@@ -821,6 +840,20 @@ async fn favorite_article(
                     .await
                     .map(Article::with_db_view)?;
 
+            let mut headers = HashMap::with_capacity(1);
+            headers.insert(String::from("type"), String::from("ARTICLE_FAVORITED"));
+
+            let favorite_event = FavoriteEvent::with_user_and_article(auth_ctx.user_id, &article);
+
+            let create_outbox_entry = db::outbox::CreateOutboxEntry {
+                topic: String::from("article"),
+                partition_key: Some(article.id.to_string()),
+                headers: Some(headers),
+                payload: Some(favorite_event),
+            };
+
+            let _ = db::outbox::create_outbox_entry(&mut tx, create_outbox_entry).await?;
+
             Ok(Json(ArticleBody { article }).into_response())
         }
     };
@@ -872,6 +905,20 @@ async fn unfavorite_article(
                 db::article::remove_article_favorite(&mut tx, &article.id, &auth_ctx.user_id)
                     .await
                     .map(Article::with_db_view)?;
+
+            let mut headers = HashMap::with_capacity(1);
+            headers.insert(String::from("type"), String::from("ARTICLE_UNFAVORITED"));
+
+            let favorite_event = FavoriteEvent::with_user_and_article(auth_ctx.user_id, &article);
+
+            let create_outbox_entry = db::outbox::CreateOutboxEntry {
+                topic: String::from("article"),
+                partition_key: Some(article.id.to_string()),
+                headers: Some(headers),
+                payload: Some(favorite_event),
+            };
+
+            let _ = db::outbox::create_outbox_entry(&mut tx, create_outbox_entry).await?;
 
             Ok(Json(ArticleBody { article }).into_response())
         }
