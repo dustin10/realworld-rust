@@ -27,11 +27,8 @@ pub struct AppContext {
 }
 
 /// Creates the [`Router`] that exposes all of the routes that the application serves over HTTP.
-pub fn router(db: PgPool, config: Config) -> Router {
-    let context = AppContext {
-        config: Arc::new(config),
-        db,
-    };
+pub fn router(db: PgPool, config: Arc<Config>) -> Router {
+    let context = AppContext { config, db };
 
     let article_router = article::router().with_state(context.clone());
     let profile_router = profile::router().with_state(context.clone());

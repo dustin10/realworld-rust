@@ -331,6 +331,7 @@ struct FavoriteEvent {
 }
 
 impl FavoriteEvent {
+    /// Creates a new [`FavoriteEvent`] with the given user id and [`Article`].
     fn with_user_and_article(user_id: Uuid, article: &Article) -> Self {
         Self {
             user_id,

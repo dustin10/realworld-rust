@@ -19,8 +19,8 @@ futures = "0.3.29"
 hmac = "0.12.1"
 http = "1.0.0"
 jwt = "0.16.0"
-kafka = "0.10.0"
 rayon = "1.8.0"
+rdkafka = { version = "0.35.0", features = ["cmake-build"] }
 serde = { version = "1.0.193", features = ["derive"] }
 serde_json = "1.0.108"
 sha2 = "0.10.8"

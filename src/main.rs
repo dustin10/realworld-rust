@@ -1,6 +1,8 @@
 use realworld::config::Config;
+use realworld::event;
 use realworld::http;
 use sqlx::postgres::PgPoolOptions;
+use std::sync::Arc;
 use std::time::Duration;
 use tracing::metadata::LevelFilter;
 use tracing_subscriber::EnvFilter;
@@ -38,7 +40,7 @@ async fn main() -> anyhow::Result<()> {
     // Initialize the configuration from the layered sources. Custom configuration can be added by
     // adding configuration to the conf/local.toml file, the .env file at the root dir or by
     // setting corresponding environment variables at runtime with the RW_ prefix.
-    let config = Config::init_from_env()?;
+    let config = Arc::new(Config::init_from_env()?);
 
     // Create the connection pool that will be used to interact with the backend database. In a
     // real application the user would want to tweak the available parameters based on the expected
@@ -54,11 +56,15 @@ async fn main() -> anyhow::Result<()> {
     // against the database before we start listening for HTTP connections.
     sqlx::migrate!().run(&pool).await?;
 
+    // Start the outbox processing task
+    let outbox_fut = event::start_outbox_processor(pool.clone(), Arc::clone(&config));
+
     // Configure the routes for the application and start the HTTP server on the configured port.
     let tcp_listener =
         tokio::net::TcpListener::bind(format!("127.0.0.1:{}", config.http.port)).await?;
 
-    let http_fut = async { axum::serve(tcp_listener, http::router(pool, config)).await };
+    let http_fut =
+        async { axum::serve(tcp_listener, http::router(pool, Arc::clone(&config))).await };
 
     // If running on a unix system, install a handler for the terminate signal so we can cleanly
     // shutdown. If not running on a unix system then instead use a future that will never return.
@@ -86,6 +92,11 @@ async fn main() -> anyhow::Result<()> {
                 tracing::error!("error while running HTTP server: {}", e);
             }
         }
+        outbox_res = outbox_fut => {
+            if let Err(e) = outbox_res {
+                tracing::error!("error while processing outbox: {}", e);
+            }
+        }
         _ = terminate_signal => {
             tracing::info!("received shutdown signal");
         }
@@ -94,7 +105,7 @@ async fn main() -> anyhow::Result<()> {
         }
     }
 
-    tracing::info!("application has shut down");
+    tracing::info!("application has shutdown");
 
     Ok(())
 }

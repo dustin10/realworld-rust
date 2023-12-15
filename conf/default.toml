@@ -13,3 +13,7 @@ connection_timeout = "60"
 
 [kafka]
 servers = "localhost:29092"
+
+[outbox]
+interval = 1000
+batch_size = 10

@@ -65,6 +65,16 @@ pub struct Kafka {
     pub servers: String,
 }
 
+/// The [`Outbox`] struct contains all of the configuration values related to publishing entries in
+/// the `outbox` database table to Kafka.
+#[derive(Debug, Deserialize)]
+pub struct Outbox {
+    /// Time in milliseconds between sweeps of the the outbox table.
+    pub interval: u64,
+    /// Maximum number of entries in the outbox table that should be processed in a single sweep.
+    pub batch_size: u64,
+}
+
 /// The [`Config`] struct contains all of the available application configuration.
 #[derive(Debug, Deserialize)]
 pub struct Config {
@@ -78,6 +88,8 @@ pub struct Config {
     pub database: Database,
     /// Kafka configuration for the application.
     pub kafka: Kafka,
+    /// Outbox configuration for the application.
+    pub outbox: Outbox,
 }
 
 impl Config {
@@ -142,6 +154,9 @@ mod tests {
         assert_eq!(60, config.database.connection_timeout);
 
         assert_eq!("localhost:29092", config.kafka.servers);
+
+        assert_eq!(1000, config.outbox.interval);
+        assert_eq!(10, config.outbox.batch_size);
     }
 
     /// Verifies that a configured env variable correctly overrides the corresponding configuration

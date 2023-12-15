@@ -4,11 +4,17 @@
 An application written in Rust that adheres to the [RealWorld](https://github.com/gothinkster/realworld) specification. For
 more information on the specification head over to the [RealWorld](https://github.com/gothinkster/realworld) repo.
 
+The application goes a little further that what is defined in the specification aand adds the following functionality as well.
+
+* Simple implementation of the [Transactional Outbox](https://microservices.io/patterns/data/transactional-outbox.html) pattern for publishing events
+* A simple Kafka event consumer
+
 ## Stack
 
 * Language - [Rust](https://www.rust-lang.org/)
 * HTTP - [axum](https://docs.rs/axum/latest/axum/)
 * Database - [PostgreSQL](https://www.postgresql.org/)
+* Events - [Kafka](https://kafka.apache.org/)
 
 A `docker-compose.yml` file is provided so that all dependencies of the application can be run locally which requires
 [Docker](https://www.docker.com/) to be installed.
@@ -24,6 +30,9 @@ A `docker-compose.yml` file is provided so that all dependencies of the applicat
 
 # start the infrastructure required to run the application
 > docker-compose up -d
+
+# initialize kafka topics
+> ./init-kafka.sh
 
 # run the application
 > cargo run
