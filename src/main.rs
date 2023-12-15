@@ -57,7 +57,7 @@ async fn main() -> anyhow::Result<()> {
     sqlx::migrate!().run(&pool).await?;
 
     // Start the outbox processing task
-    let outbox_fut = event::start_outbox_processor(pool.clone(), Arc::clone(&config));
+    let outbox_fut = event::produce::start_outbox_processor(pool.clone(), Arc::clone(&config));
 
     // Configure the routes for the application and start the HTTP server on the configured port.
     let tcp_listener =

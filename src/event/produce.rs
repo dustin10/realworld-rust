@@ -1,39 +1,16 @@
 use crate::{
     config::Config,
     db::{self, outbox::OutboxEntry},
+    event::Error,
 };
 
 use rdkafka::{
-    consumer::StreamConsumer,
     message::{Header, OwnedHeaders},
     producer::{FutureProducer, FutureRecord},
     util::Timeout,
 };
 use sqlx::PgPool;
 use std::{sync::Arc, time::Duration};
-
-#[derive(Debug, thiserror::Error)]
-pub enum Error {
-    #[error("error initializing Kafka")]
-    Initialization {
-        #[from]
-        source: rdkafka::error::KafkaError,
-    },
-    #[error("error processing outbox entries")]
-    OutboxProcessing {
-        #[from]
-        source: tokio::task::JoinError,
-    },
-    #[error("error querying the database for outbox entries")]
-    OutboxDatabase {
-        #[from]
-        source: sqlx::Error,
-    },
-    #[error("error publishing Kafka event for an outbox entry")]
-    OutboxPublish,
-    #[error("error consuming Kafka events")]
-    EventProcessing,
-}
 
 /// Starts the outbox processing task that will execute at the configured interval and process
 /// any entries in the `outbox` database table by submitting the corresponding event to Kafka.
@@ -130,24 +107,4 @@ async fn process_entry(entry: OutboxEntry, producer: &FutureProducer) -> Result<
             tracing::error!("error publishing to Kafka: {}", e.0);
             Error::OutboxPublish
         })
-}
-
-/// Initialize the Kafka consumer from the application configuration.
-pub async fn init_kafka_consumer(config: Arc<Config>) -> Result<(), Error> {
-    // Similar to the producer, in a real production application the configuration would need to
-    // be tuned to best meet the use case and performance requirements of the application.
-    let mut consumer_config = rdkafka::ClientConfig::new();
-    consumer_config.set("group.id", "realworld");
-    consumer_config.set("bootstrap.servers", &config.kafka.servers);
-    consumer_config.set("enable.auto.commit", "false");
-    consumer_config.set("statistics.interval.ms", "120000");
-    consumer_config.set("auto.offset.reset", "latest");
-
-    if tracing::enabled!(tracing::Level::DEBUG) {
-        consumer_config.set_log_level(rdkafka::config::RDKafkaLogLevel::Debug);
-    }
-
-    let _consumer: StreamConsumer = consumer_config.create()?;
-
-    Ok(())
 }
