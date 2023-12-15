@@ -24,7 +24,7 @@ impl ClientContext for ConsumeContext {
 impl ConsumerContext for ConsumeContext {
     /// Hook invoked right before the consumer begins rebalancing.
     fn pre_rebalance(&self, rebalance: &Rebalance) {
-        tracing::debug!("topic rebalance initiated: {:?}", rebalance);
+        tracing::info!("topic rebalance initiated: {:?}", rebalance);
     }
     /// Hook invoked after the consumer rebalancing has been completed.
     fn post_rebalance(&self, rebalance: &Rebalance) {
@@ -64,7 +64,7 @@ impl ConsumerContext for ConsumeContext {
     }
 }
 
-/// Initialize the Kafka consumer from the application configuration.
+/// Starts the Kafka consumer configured with the application configuration.
 pub async fn start_kafka_consumer(config: Arc<Config>) -> Result<(), Error> {
     // Similar to the producer, in a real production application the configuration would need to
     // be tuned to best meet the use case and performance requirements of the application.
@@ -89,7 +89,9 @@ pub async fn start_kafka_consumer(config: Arc<Config>) -> Result<(), Error> {
         .try_for_each(|msg: BorrowedMessage| async move {
             // Here you could do any processing you need to on the messages that you recieve. This
             // consumer will be subscribed to both the `article` and `user` topics and simply print
-            // out the payload that is received.
+            // out the payload that is received. A lot of this depends on how your topics and
+            // events are laid out but for this application how the event was processed would be
+            // determined by the topic the event was received on and `type` header value.
             match msg.payload_view::<str>() {
                 Some(Ok(payload)) => {
                     tracing::info!("received event with payload: {}", payload);

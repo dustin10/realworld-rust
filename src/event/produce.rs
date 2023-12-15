@@ -36,14 +36,14 @@ pub async fn schedule_outbox_sweep(config: Arc<Config>, tx: Sender<()>) -> Resul
     Err(scheduled_task.await?)
 }
 
-/// Stats a task that receives messages on the given [`Receiver`] and processes a batch of outbox
+/// Starts a task that receives messages on the given [`Receiver`] and processes a batch of outbox
 /// entries when one is received.
 pub async fn start_outbox_receiver(
     config: Arc<Config>,
     db: PgPool,
     mut rx: Receiver<()>,
 ) -> Result<(), Error> {
-    // In a real production application the producer configuration would most likely need to much
+    // In a real production application the producer configuration would most likely need to be
     // more more finely tuned to meet the use case and performance requirements.
     let mut producer_config = rdkafka::ClientConfig::new();
     producer_config.set("bootstrap.servers", &config.kafka.servers);
@@ -80,7 +80,7 @@ pub async fn start_outbox_receiver(
     Err(channel_task.await?)
 }
 
-/// Queries the database for a batch of outbox entries and then publish events to Kafka using the
+/// Queries the database for a batch of outbox entries and then publishes an event to Kafka using the
 /// details contained in the entry.
 async fn process_batch(
     db: &PgPool,
