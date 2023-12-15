@@ -11,12 +11,40 @@ use rdkafka::{
 };
 use sqlx::PgPool;
 use std::{sync::Arc, time::Duration};
+use tokio::sync::mpsc::{Receiver, Sender};
 
-/// Starts the outbox processing task that will execute at the configured interval and process
-/// any entries in the `outbox` database table by submitting the corresponding event to Kafka.
-pub async fn start_outbox_processor(db: PgPool, config: Arc<Config>) -> Result<(), Error> {
-    // In a real production application the producer configuration would need to much more more
-    // finely tuned to meet the use case and performance requirements.
+/// Schedules a sweep of the outbox to process any entries that may have been missed when a message
+/// was sent over the outbox channel.
+pub async fn schedule_outbox_sweep(config: Arc<Config>, tx: Sender<()>) -> Result<(), Error> {
+    let interval_ms = config.outbox.interval;
+
+    tracing::info!("scheduling outbox entry sweep for every {}ms", interval_ms);
+
+    let scheduled_task = tokio::task::spawn(async move {
+        let mut interval = tokio::time::interval(Duration::from_millis(interval_ms));
+
+        loop {
+            interval.tick().await;
+
+            if let Err(e) = tx.send(()).await {
+                tracing::error!("failed to notify outbox processor on schedule tick: {}", e);
+            }
+        }
+    });
+
+    // We should never really return here as we simply log when an error is encountered right now.
+    Err(scheduled_task.await?)
+}
+
+/// Stats a task that receives messages on the given [`Receiver`] and processes a batch of outbox
+/// entries when one is received.
+pub async fn start_outbox_receiver(
+    config: Arc<Config>,
+    db: PgPool,
+    mut rx: Receiver<()>,
+) -> Result<(), Error> {
+    // In a real production application the producer configuration would most likely need to much
+    // more more finely tuned to meet the use case and performance requirements.
     let mut producer_config = rdkafka::ClientConfig::new();
     producer_config.set("bootstrap.servers", &config.kafka.servers);
 
@@ -26,35 +54,30 @@ pub async fn start_outbox_processor(db: PgPool, config: Arc<Config>) -> Result<(
 
     let producer: FutureProducer = producer_config.create()?;
 
-    let interval_ms = config.outbox.interval;
     let batch_size = config.outbox.batch_size as i64;
 
     tracing::info!(
-        "starting outbox processing task with interval {} and batch size {}",
+        "starting channel-based outbox receiver with batch size {}",
         batch_size,
-        interval_ms
     );
 
-    let task = tokio::task::spawn(async move {
-        let mut interval = tokio::time::interval(Duration::from_millis(interval_ms));
-
+    let channel_task = tokio::task::spawn(async move {
         loop {
-            interval.tick().await;
-
-            match process_batch(&db, &producer, batch_size).await {
-                Err(e) => return e,
-                Ok(num_processed) => {
-                    if num_processed > 0 {
-                        tracing::info!("processed {} outbox entries", num_processed);
+            if rx.recv().await.is_some() {
+                match process_batch(&db, &producer, batch_size).await {
+                    Err(e) => tracing::error!("error processing outbox batch: {}", e),
+                    Ok(num_processed) => {
+                        if num_processed > 0 {
+                            tracing::info!("processed {} outbox entries", num_processed);
+                        }
                     }
                 }
             }
         }
     });
 
-    // We should never get here unless an unexpected error occurred while processing the outbox
-    // entries. In that case we go ahead and return the error and shutdown the application.
-    Err(task.await?)
+    // We should never really return here as we simply log when an error is encountered right now.
+    Err(channel_task.await?)
 }
 
 /// Queries the database for a batch of outbox entries and then publish events to Kafka using the

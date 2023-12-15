@@ -224,6 +224,11 @@ async fn create_user(
 
     tx.commit().await?;
 
+    match ctx.outbox_tx.send(()).await {
+        Ok(_) => tracing::debug!("successfully notified outbox processor of new entry"),
+        Err(e) => tracing::warn!("failed to notify outbox processor of new entry: {}", e),
+    }
+
     Ok(Json(UserBody { user }))
 }
 
@@ -304,6 +309,12 @@ async fn login_user(
     };
 
     tx.commit().await?;
+
+    // TODO: only do this if we actually have a successful login
+    match ctx.outbox_tx.send(()).await {
+        Ok(_) => tracing::debug!("successfully notified outbox processor of new entry"),
+        Err(e) => tracing::warn!("failed to notify outbox processor of new entry: {}", e),
+    }
 
     response
 }
@@ -438,6 +449,12 @@ async fn update_user(
     };
 
     tx.commit().await?;
+
+    // TODO: only do this if we actually have a successful update
+    match ctx.outbox_tx.send(()).await {
+        Ok(_) => tracing::debug!("successfully notified outbox processor of new entry"),
+        Err(e) => tracing::warn!("failed to notify outbox processor of new entry: {}", e),
+    }
 
     response
 }

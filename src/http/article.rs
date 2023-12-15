@@ -543,6 +543,11 @@ async fn create_article(
 
     tx.commit().await?;
 
+    match ctx.outbox_tx.send(()).await {
+        Ok(_) => tracing::debug!("successfully notified outbox processor of new entry"),
+        Err(e) => tracing::warn!("failed to notify outbox processor of new entry: {}", e),
+    }
+
     Ok(Json(ArticleBody { article }).into_response())
 }
 
@@ -642,6 +647,12 @@ async fn delete_article(
 
     tx.commit().await?;
 
+    // TODO: only do this if we have a successful delete
+    match ctx.outbox_tx.send(()).await {
+        Ok(_) => tracing::debug!("successfully notified outbox processor of new entry"),
+        Err(e) => tracing::warn!("failed to notify outbox processor of new entry: {}", e),
+    }
+
     response
 }
 
@@ -717,6 +728,12 @@ async fn create_comment(
     };
 
     tx.commit().await?;
+
+    // TODO: only do this if we have a successful create
+    match ctx.outbox_tx.send(()).await {
+        Ok(_) => tracing::debug!("successfully notified outbox processor of new entry"),
+        Err(e) => tracing::warn!("failed to notify outbox processor of new entry: {}", e),
+    }
 
     response
 }
@@ -794,6 +811,12 @@ async fn delete_comment(
 
     tx.commit().await?;
 
+    // TODO: only do this if we have a successful delete
+    match ctx.outbox_tx.send(()).await {
+        Ok(_) => tracing::debug!("successfully notified outbox processor of new entry"),
+        Err(e) => tracing::warn!("failed to notify outbox processor of new entry: {}", e),
+    }
+
     response
 }
 
@@ -861,6 +884,12 @@ async fn favorite_article(
 
     tx.commit().await?;
 
+    // TODO: only do this if we have a successful addition
+    match ctx.outbox_tx.send(()).await {
+        Ok(_) => tracing::debug!("successfully notified outbox processor of new entry"),
+        Err(e) => tracing::warn!("failed to notify outbox processor of new entry: {}", e),
+    }
+
     response
 }
 
@@ -926,6 +955,12 @@ async fn unfavorite_article(
     };
 
     tx.commit().await?;
+
+    // TODO: only do this if we have a successful removal
+    match ctx.outbox_tx.send(()).await {
+        Ok(_) => tracing::debug!("successfully notified outbox processor of new entry"),
+        Err(e) => tracing::warn!("failed to notify outbox processor of new entry: {}", e),
+    }
 
     response
 }

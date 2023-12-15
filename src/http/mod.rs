@@ -15,6 +15,7 @@ use axum::{
 use serde::Deserialize;
 use sqlx::PgPool;
 use std::sync::Arc;
+use tokio::sync::mpsc::Sender;
 
 /// The [`AppContext`] is the state that is shared between all HTTP handler functions and makes
 /// common data and functionality available to them.
@@ -24,11 +25,17 @@ pub struct AppContext {
     pub config: Arc<Config>,
     /// Connection pool that allows for querying the database.
     pub db: PgPool,
+    /// Sender used to notify the outbox processor that an outbox entry has been created.
+    pub outbox_tx: Sender<()>,
 }
 
 /// Creates the [`Router`] that exposes all of the routes that the application serves over HTTP.
-pub fn router(db: PgPool, config: Arc<Config>) -> Router {
-    let context = AppContext { config, db };
+pub fn router(db: PgPool, config: Arc<Config>, outbox_tx: Sender<()>) -> Router {
+    let context = AppContext {
+        config,
+        db,
+        outbox_tx,
+    };
 
     let article_router = article::router().with_state(context.clone());
     let profile_router = profile::router().with_state(context.clone());

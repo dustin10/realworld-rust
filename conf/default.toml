@@ -15,5 +15,6 @@ connection_timeout = "60"
 servers = "localhost:29092"
 
 [outbox]
-interval = 1000
+channel_size = 128
+interval = 30000
 batch_size = 10

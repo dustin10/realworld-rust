@@ -56,9 +56,17 @@ async fn main() -> anyhow::Result<()> {
     // against the database before we start listening for HTTP connections.
     sqlx::migrate!().run(&pool).await?;
 
-    // Start the outbox processing task
-    let outbox_fut = event::produce::start_outbox_processor(pool.clone(), Arc::clone(&config));
+    // Start the outbox processing related tasks. The outbox processor will respond to message sent
+    // over the channel as well as periodically sweep the outbox database table.
+    let (tx, rx) = tokio::sync::mpsc::channel::<()>(config.outbox.channel_size);
 
+    let outbox_schedule_fut =
+        event::produce::schedule_outbox_sweep(Arc::clone(&config), tx.clone());
+
+    let outbox_processor_fut =
+        event::produce::start_outbox_receiver(Arc::clone(&config), pool.clone(), rx);
+
+    // Start the Kafka consumer.
     let consumer_fut = event::consume::start_kafka_consumer(Arc::clone(&config));
 
     // Configure the routes for the application and start the HTTP server on the configured port.
@@ -66,7 +74,7 @@ async fn main() -> anyhow::Result<()> {
         tokio::net::TcpListener::bind(format!("127.0.0.1:{}", config.http.port)).await?;
 
     let http_fut =
-        async { axum::serve(tcp_listener, http::router(pool, Arc::clone(&config))).await };
+        async { axum::serve(tcp_listener, http::router(pool, Arc::clone(&config), tx)).await };
 
     // If running on a unix system, install a handler for the terminate signal so we can cleanly
     // shutdown. If not running on a unix system then instead use a future that will never return.
@@ -94,8 +102,13 @@ async fn main() -> anyhow::Result<()> {
                 tracing::error!("error running HTTP server: {}", e);
             }
         }
-        outbox_res = outbox_fut => {
-            if let Err(e) = outbox_res {
+        outbox_schedule_res = outbox_schedule_fut => {
+            if let Err(e) = outbox_schedule_res {
+                tracing::error!("error with the outbox processor schedule: {}", e);
+            }
+        }
+        outbox_processor_res = outbox_processor_fut => {
+            if let Err(e) = outbox_processor_res {
                 tracing::error!("error processing outbox entries: {}", e);
             }
         }

@@ -69,6 +69,9 @@ pub struct Kafka {
 /// the `outbox` database table to Kafka.
 #[derive(Debug, Deserialize)]
 pub struct Outbox {
+    /// Size of the channel used to notify the outbox processor that an entry was saved in the
+    /// outbox table and should be processed.
+    pub channel_size: usize,
     /// Time in milliseconds between sweeps of the the outbox table.
     pub interval: u64,
     /// Maximum number of entries in the outbox table that should be processed in a single sweep.
