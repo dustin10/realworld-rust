@@ -59,6 +59,8 @@ async fn main() -> anyhow::Result<()> {
     // Start the outbox processing task
     let outbox_fut = event::produce::start_outbox_processor(pool.clone(), Arc::clone(&config));
 
+    let consumer_fut = event::consume::start_kafka_consumer(Arc::clone(&config));
+
     // Configure the routes for the application and start the HTTP server on the configured port.
     let tcp_listener =
         tokio::net::TcpListener::bind(format!("127.0.0.1:{}", config.http.port)).await?;
@@ -89,12 +91,17 @@ async fn main() -> anyhow::Result<()> {
     tokio::select! {
         http_res = http_fut => {
             if let Err(e) = http_res {
-                tracing::error!("error while running HTTP server: {}", e);
+                tracing::error!("error running HTTP server: {}", e);
             }
         }
         outbox_res = outbox_fut => {
             if let Err(e) = outbox_res {
-                tracing::error!("error while processing outbox: {}", e);
+                tracing::error!("error processing outbox entries: {}", e);
+            }
+        }
+        consumer_res = consumer_fut => {
+            if let Err(e) = consumer_res {
+                tracing::error!("error consuming Kafka events: {}", e);
             }
         }
         _ = terminate_signal => {

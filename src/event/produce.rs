@@ -26,10 +26,17 @@ pub async fn start_outbox_processor(db: PgPool, config: Arc<Config>) -> Result<(
 
     let producer: FutureProducer = producer_config.create()?;
 
+    let interval_ms = config.outbox.interval;
     let batch_size = config.outbox.batch_size as i64;
 
+    tracing::info!(
+        "starting outbox processing task with interval {} and batch size {}",
+        batch_size,
+        interval_ms
+    );
+
     let task = tokio::task::spawn(async move {
-        let mut interval = tokio::time::interval(Duration::from_millis(config.outbox.interval));
+        let mut interval = tokio::time::interval(Duration::from_millis(interval_ms));
 
         loop {
             interval.tick().await;
@@ -103,8 +110,5 @@ async fn process_entry(entry: OutboxEntry, producer: &FutureProducer) -> Result<
                 &o
             )
         })
-        .map_err(|e| {
-            tracing::error!("error publishing to Kafka: {}", e.0);
-            Error::OutboxPublish
-        })
+        .map_err(|e| e.0.into())
 }
