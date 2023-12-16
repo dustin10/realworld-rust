@@ -38,6 +38,13 @@ A `docker-compose.yml` file is provided so that all dependencies of the applicat
 > cargo run
 ```
 
+In order to run the application with `DEBUG` level logs enabled simply use the following command instead of the one
+shown above.
+
+``` sh
+> RUST_LOG=DEBUG cargo run
+```
+
 ## Running API Tests
 
 A script to run tests using a Postman collection is provided in the `api-tests` folder. Assuming the application is
