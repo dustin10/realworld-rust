@@ -48,11 +48,7 @@ already running, the following commands can be executed to run the API tests.
 > cd api-tests
 
 # run the tests specifying the host and port of your application
-> API_URL=http://localhost:7100/api ./run-api-tests.sh
+> APIURL=http://localhost:7100/api ./run-api-tests.sh
 ```
 
 > Note that the script requires [npx](https://github.com/npm/npx) to be installed.
-
-After the tests run, output similar to the following image should be visible in the console.
-
-![API Test Results](assets/img/api-test-results.png)

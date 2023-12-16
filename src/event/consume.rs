@@ -4,7 +4,7 @@ use futures::TryStreamExt;
 use rdkafka::{
     consumer::{Consumer, ConsumerContext, Rebalance, StreamConsumer},
     error::KafkaResult,
-    message::BorrowedMessage,
+    message::{BorrowedMessage, Headers},
     ClientContext, Message, Statistics, TopicPartitionList,
 };
 use std::sync::Arc;
@@ -67,11 +67,13 @@ impl ConsumerContext for ConsumeContext {
 /// Starts the Kafka consumer configured with the application configuration.
 pub async fn start_kafka_consumer(config: Arc<Config>) -> Result<(), Error> {
     // Similar to the producer, in a real production application the configuration would need to
-    // be tuned to best meet the use case and performance requirements of the application.
+    // be tuned to best meet the use case and performance requirements of the application. For
+    // instance, you would most likely want to manage the committing offsets yourself rather than
+    // having auto commit enabled.
     let mut consumer_config = rdkafka::ClientConfig::new();
     consumer_config.set("group.id", "realworld");
     consumer_config.set("bootstrap.servers", &config.kafka.servers);
-    consumer_config.set("enable.auto.commit", "false");
+    consumer_config.set("enable.auto.commit", "true");
     consumer_config.set("statistics.interval.ms", "120000");
     consumer_config.set("auto.offset.reset", "latest");
 
@@ -92,18 +94,44 @@ pub async fn start_kafka_consumer(config: Arc<Config>) -> Result<(), Error> {
             // out the payload that is received. A lot of this depends on how your topics and
             // events are laid out but for this application how the event was processed would be
             // determined by the topic the event was received on and `type` header value.
+
+            // Extract event type header value.
+            let mut event_type = "unknown";
+            if let Some(headers) = msg.headers() {
+                for (idx, header) in headers.iter().enumerate() {
+                    if header.key == "type" {
+                        event_type = headers
+                            .try_get_as(idx)
+                            .and_then(|h| h.ok())
+                            .and_then(|h| h.value)
+                            .unwrap_or(event_type);
+                    }
+                }
+            }
+
+            // Log appropriate message based on the message payload.
             match msg.payload_view::<str>() {
                 Some(Ok(payload)) => {
-                    tracing::info!("received event with payload: {}", payload);
+                    tracing::info!(
+                        "received event of type {} on {} with payload: {}",
+                        event_type,
+                        msg.topic(),
+                        payload
+                    );
                 }
                 Some(Err(err)) => {
                     tracing::error!(
-                        "received invalid string payload on {}: {}",
+                        "received event of type {} on {} with invalid string payload: {}",
+                        event_type,
                         msg.topic(),
                         err
                     )
                 }
-                None => tracing::info!("no payload found in message on {}", msg.topic()),
+                None => tracing::info!(
+                    "received event of type {} on {} with no payload",
+                    event_type,
+                    msg.topic()
+                ),
             }
 
             Ok(())
