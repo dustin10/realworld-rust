@@ -709,12 +709,32 @@ async fn update_article(
 
                 let article = Article::with_db_view(db_view);
 
+                let article_event = ArticleEvent::with_article(&article);
+
+                let mut headers = HashMap::with_capacity(1);
+                headers.insert(String::from("type"), String::from("ARTICLE_UPDATED"));
+
+                let create_outbox_entry = db::outbox::CreateOutboxEntry {
+                    topic: String::from("article"),
+                    partition_key: Some(article_event.id.to_string()),
+                    headers: Some(headers),
+                    payload: Some(article_event),
+                };
+
+                let _ = db::outbox::create_outbox_entry(&mut tx, create_outbox_entry).await?;
+
                 Ok(Json(ArticleBody { article }).into_response())
             }
         }
     };
 
     tx.commit().await?;
+
+    // TODO: only do this if we have a successful update
+    match ctx.outbox_tx.send(()).await {
+        Ok(_) => tracing::debug!("successfully notified outbox processor of new entry"),
+        Err(e) => tracing::warn!("failed to notify outbox processor of new entry: {}", e),
+    }
 
     response
 }
