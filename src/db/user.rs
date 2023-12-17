@@ -24,7 +24,7 @@ const GET_PROFILE_BY_USERNAME_QUERY: &str = r#"
         u.name,
         u.bio,
         u.image,
-        (SELECT COUNT(*) FROM user_follows AS uf WHERE uf.user_id = u.id AND uf.follower_id = $1)::int::bool AS follows
+        (SELECT COUNT(*) FROM user_follows AS uf WHERE uf.user_id = u.id AND uf.follower_id = $1)::int::bool AS following
     FROM
         users AS u
     WHERE
@@ -37,7 +37,7 @@ const GET_PROFILE_BY_ID_QUERY: &str = r#"
         u.name,
         u.bio,
         u.image,
-        (SELECT COUNT(*) FROM user_follows AS uf WHERE uf.user_id = u.id AND uf.follower_id = $1)::int::bool AS follows
+        (SELECT COUNT(*) FROM user_follows AS uf WHERE uf.user_id = u.id AND uf.follower_id = $1)::int::bool AS following
     FROM
         users AS u
     WHERE
@@ -121,11 +121,11 @@ pub struct Profile {
     pub image: Option<String>,
     /// Flag indicating whether or not the profile is being followed by the currently authenticated
     /// user. If no user is curently logged in, then the value will be set to `false`.
-    pub follows: bool,
+    pub following: bool,
 }
 
 /// Retrieves a [`User`] from the database given the id of the user.
-pub async fn fetch_user_by_id(
+pub async fn query_user_by_id(
     cxn: &mut PgConnection,
     id: &Uuid,
 ) -> Result<Option<User>, sqlx::Error> {
@@ -136,7 +136,7 @@ pub async fn fetch_user_by_id(
 }
 
 /// Retrieves a [`User`] from the database given the email address of the user.
-pub async fn fetch_user_by_email(
+pub async fn query_user_by_email(
     cxn: &mut PgConnection,
     email: &str,
 ) -> Result<Option<User>, sqlx::Error> {
@@ -177,7 +177,7 @@ pub async fn update_user(
 
 /// Retrieves a [`Profile`] from the database given the name of the user that the profile
 /// represents and the id of the authenticated user if available to determine the follower context.
-pub async fn fetch_profile_by_username(
+pub async fn query_profile_by_username(
     cxn: &mut PgConnection,
     username: &str,
     auth_id: Option<Uuid>,
@@ -193,7 +193,7 @@ pub async fn fetch_profile_by_username(
 
 /// Retrieves a [`Profile`] from the database given the id of the user that the profile
 /// represents and the id of the authenticated user if available to determine the follower context.
-pub async fn fetch_profile_by_id(
+pub async fn query_profile_by_id(
     cxn: &mut PgConnection,
     id: &Uuid,
     auth_id: Option<Uuid>,
@@ -207,8 +207,7 @@ pub async fn fetch_profile_by_id(
         .await
 }
 
-/// Inserts an entry into the table that tracks profile follows for a user. Returns the updated
-/// [`Profile`] for the user that was followed in the context of the follower id.
+/// Inserts an entry into the table that tracks profile follows for a user.
 pub async fn add_profile_follow(
     cxn: &mut PgConnection,
     username: &str,
@@ -220,11 +219,10 @@ pub async fn add_profile_follow(
         .execute(&mut *cxn)
         .await?;
 
-    fetch_profile_by_username(cxn, username, Some(follower_id)).await
+    query_profile_by_username(cxn, username, Some(follower_id)).await
 }
 
-/// Deletes an entry from the table that tracks profile follows for a user. Returns the updated
-/// [`Profile`] for the user that was unfollowed in the context of the follower id.
+/// Deletes an entry from the table that tracks profile follows for a user.
 pub async fn remove_profile_follow(
     cxn: &mut PgConnection,
     username: &str,
@@ -236,5 +234,5 @@ pub async fn remove_profile_follow(
         .execute(&mut *cxn)
         .await?;
 
-    fetch_profile_by_username(cxn, username, Some(follower_id)).await
+    query_profile_by_username(cxn, username, Some(follower_id)).await
 }

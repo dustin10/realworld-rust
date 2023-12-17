@@ -68,7 +68,7 @@ async fn get_profile(
 
     let mut tx = ctx.db.begin().await?;
 
-    let response = match db::user::fetch_profile_by_username(&mut tx, &username, auth_id).await? {
+    let response = match db::user::query_profile_by_username(&mut tx, &username, auth_id).await? {
         None => Ok(StatusCode::NOT_FOUND.into_response()),
         Some(profile) => Ok(Json(ProfileBody { profile }).into_response()),
     };

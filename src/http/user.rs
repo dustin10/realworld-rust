@@ -271,7 +271,7 @@ async fn login_user(
 
     // if no user is found then just return UNAUTHORIZED instead of not found to prevent an
     // attacker from fishing for valid email addresses
-    let response = match db::user::fetch_user_by_email(&mut tx, &request.user.email).await? {
+    let response = match db::user::query_user_by_email(&mut tx, &request.user.email).await? {
         None => Ok(StatusCode::UNAUTHORIZED.into_response()),
         Some(db_user) => {
             let resp = if auth::verify_password(request.user.password, db_user.password.clone())
@@ -339,7 +339,7 @@ async fn login_user(
 async fn get_user(ctx: State<AppContext>, auth_ctx: AuthContext) -> Result<Response, Error> {
     let mut tx = ctx.db.begin().await?;
 
-    let response = match db::user::fetch_user_by_id(&mut tx, &auth_ctx.user_id).await? {
+    let response = match db::user::query_user_by_id(&mut tx, &auth_ctx.user_id).await? {
         Some(db_user) => {
             let user = User::from_db_user_with_token(db_user, auth_ctx.encoded_jwt);
 
@@ -397,7 +397,7 @@ async fn update_user(
 ) -> Result<Response, Error> {
     let mut tx = ctx.db.begin().await?;
 
-    let response = match db::user::fetch_user_by_id(&mut tx, &auth_ctx.user_id).await? {
+    let response = match db::user::query_user_by_id(&mut tx, &auth_ctx.user_id).await? {
         None => Ok(StatusCode::UNAUTHORIZED.into_response()),
         Some(db_user) => {
             let username = request.user.username.as_ref().unwrap_or(&db_user.name);

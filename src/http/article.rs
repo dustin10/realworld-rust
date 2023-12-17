@@ -119,7 +119,7 @@ impl Article {
                 name: view.author_name,
                 bio: view.author_bio,
                 image: view.author_image,
-                follows: view.author_followed,
+                following: view.author_followed,
             },
         }
     }
@@ -214,7 +214,7 @@ impl Comment {
                 name: view.author_name,
                 bio: view.author_bio,
                 image: view.author_image,
-                follows: view.author_followed,
+                following: view.author_followed,
             },
         }
     }
