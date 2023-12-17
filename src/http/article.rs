@@ -43,7 +43,7 @@ pub(super) fn router() -> Router<AppContext> {
         .route("/api/articles", get(list_articles).post(create_article))
         .route(
             "/api/articles/:slug",
-            get(get_article).delete(delete_article),
+            get(get_article).put(update_article).delete(delete_article),
         )
         .route(
             "/api/articles/:slug/favorite",
@@ -146,7 +146,7 @@ struct ArticlesBody {
 
 /// The [`CreateArticle`] struct contains the data received from the HTTP request to create a new
 /// article.
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Deserialize)]
 struct CreateArticle {
     /// Title of the article.
     title: String,
@@ -157,6 +157,18 @@ struct CreateArticle {
     /// List of tags associated with the article.
     #[serde(rename = "tagList")]
     tags: Option<Vec<String>>,
+}
+
+/// The [`UpdateArticle`] struct contains the data received from the HTTP request to update an
+/// existing article.
+#[derive(Debug, Deserialize)]
+struct UpdateArticle {
+    /// New ritle of the article.
+    title: Option<String>,
+    /// Description of the article.
+    description: Option<String>,
+    /// Body of the article.
+    body: Option<String>,
 }
 
 /// The [`CommentBody`] struct is the envelope in which data for a comment is returned to the
@@ -527,7 +539,7 @@ async fn create_article(
 
     let mut tx = ctx.db.begin().await?;
 
-    let article = db::article::create_article(&mut tx, &auth_ctx.user_id, &create_article)
+    let article = db::article::create_article(&mut tx, &auth_ctx.user_id, create_article)
         .await
         .map(Article::with_db_view)?;
 
@@ -604,6 +616,101 @@ async fn get_article(
             let article = Article::with_db_view(db_view);
 
             Ok(Json(ArticleBody { article }).into_response())
+        }
+    };
+
+    tx.commit().await?;
+
+    response
+}
+
+/// Handles the update article by slug API endpoint at `PUT /api/articles/:slug`. The handler will
+/// read the `slug` path parameter value and update the data for the matching article if it exists,
+/// otherwise it will return a 404 response.
+///
+/// If the authenticated user is not the author of the article, then a 403 response is returned.
+///
+/// # Request Body Format
+///
+/// ``` json
+/// {
+///   "article":{
+///     "title": "Did you train your dragon?"
+///   }
+/// }
+/// ```
+///
+/// # Accepted Fields
+///
+/// * `title`
+/// * `description`
+/// * `body`
+///
+/// # Response Body Format
+///
+/// ```json
+/// {
+///   "article": {
+///     "slug": "how-to-train-your-dragon",
+///     "title": "How to train your dragon",
+///     "description": "Ever wonder how?",
+///     "body": "It takes a Jacobian",
+///     "tagList": ["dragons", "training"],
+///     "createdAt": "2016-02-18T03:22:56.637Z",
+///     "updatedAt": "2016-02-18T03:48:35.824Z",
+///     "favorited": false,
+///     "favoritesCount": 0,
+///     "author": {
+///       "username": "jake",
+///       "bio": "I work at statefarm",
+///       "image": "https://i.stack.imgur.com/xHWG8.jpg",
+///       "following": false
+///     }
+///   }
+/// }
+///
+async fn update_article(
+    ctx: State<AppContext>,
+    auth_ctx: AuthContext,
+    Path(slug): Path<String>,
+    Json(request): Json<ArticleBody<UpdateArticle>>,
+) -> Result<Response, Error> {
+    let mut tx = ctx.db.begin().await?;
+
+    let response = match db::article::query_article_by_slug(&mut tx, &slug).await? {
+        None => Ok(StatusCode::NOT_FOUND.into_response()),
+        Some(row) => {
+            if auth_ctx.user_id != row.user_id {
+                Ok(StatusCode::FORBIDDEN.into_response())
+            } else {
+                let title = request.article.title.as_ref().unwrap_or(&row.title);
+
+                let description = request
+                    .article
+                    .description
+                    .as_ref()
+                    .unwrap_or(&row.description);
+
+                let body = request.article.body.as_ref().unwrap_or(&row.body);
+
+                let update_article = db::article::UpdateArticle {
+                    title,
+                    description,
+                    body,
+                };
+
+                let db_view = db::article::update_article(
+                    &mut tx,
+                    &row.id,
+                    update_article,
+                    &auth_ctx.user_id,
+                )
+                .await?;
+
+                let article = Article::with_db_view(db_view);
+
+                Ok(Json(ArticleBody { article }).into_response())
+            }
         }
     };
 

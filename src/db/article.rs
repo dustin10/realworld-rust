@@ -86,9 +86,13 @@ const COUNT_USER_FEED_QUERY: &str = r#"
     WHERE
         uf.follower_id = $1"#;
 
-/// SQL query used to create a new article.
+/// SQL query used to create a new article in the database.
 const CREATE_ARTICLE_QUERY: &str =
     "INSERT INTO articles (user_id, slug, title, description, body) VALUES ($1, $2, $3, $4, $5) RETURNING *";
+
+/// SQL query used to update an existing article in the database.
+const UPDATE_ARTICLE_QUERY: &str =
+    "UPDATE articles SET slug = $1, title = $2, description = $3, body = $4 WHERE id = $5";
 
 /// SQL query used to create a new tag in the database.
 const CREATE_TAG_QUERY: &str = r#"
@@ -265,6 +269,18 @@ pub struct CreateArticle<'a> {
     pub tags: Option<&'a Vec<String>>,
 }
 
+/// The [`UpdateArticle`] struct contains the data required to update an existing article in the
+/// database.
+#[derive(Debug)]
+pub struct UpdateArticle<'a> {
+    /// New title of the article.
+    pub title: &'a String,
+    /// New description of the article.
+    pub description: &'a String,
+    /// New body of the article.
+    pub body: &'a String,
+}
+
 /// The [`Comment`] struct is used to let the `sqlx` library easily map a row from the `comments`
 /// table in the database to a struct value. It is a one-to-one mapping from the database table.
 #[derive(Debug, FromRow)]
@@ -365,7 +381,7 @@ pub async fn count_articles(
 pub async fn create_article(
     cxn: &mut PgConnection,
     user_id: &Uuid,
-    article: &CreateArticle<'_>,
+    article: CreateArticle<'_>,
 ) -> Result<ArticleView, sqlx::Error> {
     // TODO: this is naive and will fail if an article with the same title exists. we could append
     // a number in that case but that could degenerate to a lot fo queries if colliding titles is a
@@ -398,7 +414,33 @@ pub async fn create_article(
         }
     }
 
-    query_article_view_by_slug(cxn, &row.slug, None)
+    query_article_view_by_slug(cxn, &row.slug, Some(*user_id))
+        .await
+        .map(|av| av.expect("article should exist"))
+}
+
+/// Updates an existing [`Article`] row in the database identified by id using the details contained
+/// in the given [`UpdateArticle`].
+pub async fn update_article(
+    cxn: &mut PgConnection,
+    id: &Uuid,
+    article: UpdateArticle<'_>,
+    user_ctx: &Uuid,
+) -> Result<ArticleView, sqlx::Error> {
+    // TODO: The comment made above in the create article function applies to this code in update
+    // article as well.
+    let slug = slug::slugify(article.title);
+
+    let _ = sqlx::query(UPDATE_ARTICLE_QUERY)
+        .bind(&slug)
+        .bind(article.title)
+        .bind(article.description)
+        .bind(article.body)
+        .bind(id)
+        .execute(&mut *cxn)
+        .await?;
+
+    query_article_view_by_slug(cxn, &slug, Some(*user_ctx))
         .await
         .map(|av| av.expect("article should exist"))
 }
@@ -420,7 +462,7 @@ pub async fn query_article_by_slug(
 pub async fn query_article_view_by_slug(
     cxn: &mut PgConnection,
     slug: &str,
-    user_ctx: Option<Uuid>,
+    user_ctx: Option<Uuid>, // TODO: probably should be Option<&Uuid> instead
 ) -> Result<Option<ArticleView>, sqlx::Error> {
     let user_context = user_ctx.unwrap_or_else(Uuid::nil);
 

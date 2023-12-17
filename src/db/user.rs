@@ -180,9 +180,9 @@ pub async fn update_user(
 pub async fn query_profile_by_username(
     cxn: &mut PgConnection,
     username: &str,
-    auth_id: Option<Uuid>,
+    user_ctx: Option<Uuid>, // TODO: property should be Option<&Uuid> instead
 ) -> Result<Option<Profile>, sqlx::Error> {
-    let user_context = auth_id.unwrap_or_else(Uuid::nil);
+    let user_context = user_ctx.unwrap_or_else(Uuid::nil);
 
     sqlx::query_as(GET_PROFILE_BY_USERNAME_QUERY)
         .bind(user_context)
@@ -196,9 +196,9 @@ pub async fn query_profile_by_username(
 pub async fn query_profile_by_id(
     cxn: &mut PgConnection,
     id: &Uuid,
-    auth_id: Option<Uuid>,
+    user_ctx: Option<Uuid>, // TODO: property should be Option<&Uuid> instead
 ) -> Result<Option<Profile>, sqlx::Error> {
-    let user_context = auth_id.unwrap_or_else(Uuid::nil);
+    let user_context = user_ctx.unwrap_or_else(Uuid::nil);
 
     sqlx::query_as(GET_PROFILE_BY_ID_QUERY)
         .bind(user_context)
