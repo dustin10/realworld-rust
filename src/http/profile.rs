@@ -70,7 +70,7 @@ async fn get_profile(
 
     let response = match db::user::fetch_profile_by_username(&mut tx, &username, auth_id).await? {
         None => Ok(StatusCode::NOT_FOUND.into_response()),
-        Some(profile) => Ok(Json(profile).into_response()),
+        Some(profile) => Ok(Json(ProfileBody { profile }).into_response()),
     };
 
     tx.commit().await?;
@@ -103,7 +103,7 @@ async fn follow_profile(
 
     let response = match db::user::add_profile_follow(&mut tx, &username, auth_ctx.user_id).await? {
         None => Ok(StatusCode::NOT_FOUND.into_response()),
-        Some(profile) => Ok(Json(profile).into_response()),
+        Some(profile) => Ok(Json(ProfileBody { profile }).into_response()),
     };
 
     tx.commit().await?;
@@ -137,7 +137,7 @@ async fn unfollow_profile(
     let response =
         match db::user::remove_profile_follow(&mut tx, &username, auth_ctx.user_id).await? {
             None => Ok(StatusCode::NOT_FOUND.into_response()),
-            Some(profile) => Ok(Json(profile).into_response()),
+            Some(profile) => Ok(Json(ProfileBody { profile }).into_response()),
         };
 
     tx.commit().await?;

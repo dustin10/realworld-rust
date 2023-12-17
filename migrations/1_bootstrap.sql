@@ -53,7 +53,11 @@ CREATE TABLE IF NOT EXISTS articles (
   description TEXT NOT NULL,
   body TEXT NOT NULL,
   created TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  updated TIMESTAMPTZ,
+  -- The provided real world test suite seems to indicate that this should always be set
+  -- but in a real application you would probably want to just leave it null until an
+  -- update to a row actually happened. The corresponding Rust types implemented for
+  -- this table allow for that rather than assuming that a value will always exist.
+  updated TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   CONSTRAINT fk_uid FOREIGN KEY(user_id) REFERENCES users(id)
 );
 
@@ -101,6 +105,8 @@ CREATE TABLE IF NOT EXISTS article_comments (
   article_id UUID NOT NULL,
   body TEXT NOT NULL,
   created TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  -- same comment for this field as above for the updated field of the articles table.
+  updated TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   CONSTRAINT fk_uid FOREIGN KEY(user_id) REFERENCES users(id),
   CONSTRAINT fk_aid FOREIGN KEY(article_id) REFERENCES articles(id)
 );
@@ -114,3 +120,12 @@ CREATE TABLE IF NOT EXISTS outbox (
   payload TEXT,
   created TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+-- create trigger on article_comments table that sets updated column when a row is changed
+CREATE TRIGGER article_comments_set_updated
+    BEFORE UPDATE
+    ON article_comments
+    FOR EACH ROW
+    WHEN (OLD IS DISTINCT FROM NEW)
+    EXECUTE FUNCTION set_updated();
+

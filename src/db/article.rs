@@ -7,7 +7,7 @@ use uuid::Uuid;
 
 /// SQL query used to fetch a page of articles allowing for filters which can be used to narrow the
 /// search results.
-const LIST_ARTICLE_VIEWS: &str = r#"
+const LIST_ARTICLE_VIEWS_QUERY: &str = r#"
     SELECT
         a.*,
         (SELECT COUNT(af.*) FROM article_favs AS af WHERE af.article_id = a.id AND af.user_id = $1)::int::bool AS favorited,
@@ -138,11 +138,7 @@ const CREATE_ARTICLE_COMMENT_QUERY: &str = r#"
         INSERT INTO article_comments (user_id, article_id, body) VALUES ($1, $2, $3) RETURNING *
     )
     SELECT
-        ic.id,
-        ic.user_id,
-        ic.article_id,
-        ic.body,
-        ic.created,
+        ic.*,
         u.id AS author_id,
         u.name AS author_name,
         u.bio AS author_bio,
@@ -282,8 +278,10 @@ pub struct Comment {
     pub article_id: Uuid,
     /// Body text of the comment.
     pub body: String,
-    /// Time at which the comment was made.
+    /// Time at which the comment was originally created.
     pub created: DateTime<Utc>,
+    /// Time at which the comment was updated.
+    pub updated: Option<DateTime<Utc>>,
 }
 
 /// The [`CommentView`] struct is used to let the `sqlx` library easily map a view of the `comments`
@@ -296,8 +294,10 @@ pub struct CommentView {
     pub id: Uuid,
     /// Body text of the comment.
     pub body: String,
-    /// Time at which the comment was made.
+    /// Time at which the comment was originally created.
     pub created: DateTime<Utc>,
+    /// Time at which the comment was last updated.
+    pub updated: Option<DateTime<Utc>>,
     /// Id of the author.
     pub author_id: Uuid,
     /// Username of the author.
@@ -334,7 +334,7 @@ pub async fn query_articles(
 ) -> Result<Vec<ArticleView>, sqlx::Error> {
     let user_context = user_ctx.unwrap_or_else(Uuid::nil);
 
-    sqlx::query_as(LIST_ARTICLE_VIEWS)
+    sqlx::query_as(LIST_ARTICLE_VIEWS_QUERY)
         .bind(user_context)
         .bind(tag)
         .bind(author)

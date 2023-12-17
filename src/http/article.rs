@@ -191,9 +191,12 @@ struct Comment {
     id: Uuid,
     /// Body text of the comment.
     body: String,
-    /// Time at which the comment was made.
+    /// Time at which the comment was originally created.
     #[serde(rename = "createdAt")]
     created: DateTime<Utc>,
+    /// Time at which the comment was last updated.
+    #[serde(rename = "updatedAt")]
+    updated: Option<DateTime<Utc>>,
     /// Public profile of the user who made the comment.
     author: Profile,
 }
@@ -205,6 +208,7 @@ impl Comment {
             id: view.id,
             body: view.body,
             created: view.created,
+            updated: view.updated,
             author: Profile {
                 id: view.author_id,
                 name: view.author_name,
