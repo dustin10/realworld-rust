@@ -89,13 +89,15 @@ async fn process_batch(
 ) -> Result<i64, Error> {
     let mut num_processed = 0;
 
-    let mut cxn = db.acquire().await?;
+    let mut tx = db.begin().await?;
 
-    let batch = db::outbox::query_outbox_entry_batch(&mut cxn, batch_size).await?;
+    let batch = db::outbox::query_outbox_entry_batch(&mut tx, batch_size).await?;
     for entry in batch {
         process_entry(entry, producer).await?;
         num_processed += 1;
     }
+
+    tx.commit().await?;
 
     Ok(num_processed)
 }

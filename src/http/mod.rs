@@ -25,7 +25,7 @@ pub struct AppContext {
     pub config: Arc<Config>,
     /// Connection pool that allows for querying the database.
     pub db: PgPool,
-    /// Sender used to notify the outbox processor that an outbox entry has been created.
+    /// Sender used to notify the outbox processor channel that an entry has been created.
     pub outbox_tx: Sender<()>,
 }
 
