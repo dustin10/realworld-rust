@@ -4,10 +4,12 @@
 An application written in Rust that adheres to the [RealWorld](https://github.com/gothinkster/realworld) specification. For
 more information on the specification head over to the [RealWorld](https://github.com/gothinkster/realworld) repo.
 
-The application goes a little further that what is defined in the specification aand adds the following functionality as well.
+The application goes a little further than what is defined in the specification by adding the following functionality in
+addition to the spec defined at the site mentioned above.
 
-* Simple implementation of the [Transactional Outbox](https://microservices.io/patterns/data/transactional-outbox.html) pattern for publishing events
-* A simple Kafka event consumer
+* Implementation of the [Transactional Outbox](https://microservices.io/patterns/data/transactional-outbox.html)
+pattern for publishing events to Kafka
+* Kafka event consumer that outputs the event data published by the application
 
 ## Stack
 
@@ -38,8 +40,8 @@ A `docker-compose.yml` file is provided so that all dependencies of the applicat
 > cargo run
 ```
 
-In order to run the application with `DEBUG` level logs enabled simply use the following command instead of the one
-shown above.
+In order to run the application with `DEBUG` level logs enabled, simply use the following command instead of the one
+shown above to start the application.
 
 ``` sh
 > RUST_LOG=DEBUG cargo run
@@ -48,7 +50,8 @@ shown above.
 ## Running API Tests
 
 A script to run tests using a Postman collection is provided in the `api-tests` folder. Assuming the application is
-already running, the following commands can be executed to run the API tests.
+already running using the default port, the following commands can be executed to run the API tests. If a different
+port is being used, then the command will need to be updated accordingly.
 
 ```sh
 # change to the dir with the script and supporting files
