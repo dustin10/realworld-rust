@@ -19,7 +19,19 @@ enum Status {
 /// The [`Health`] struct contains the result of the health check for the application.
 #[derive(Debug, Serialize)]
 struct Health {
-    /// Overall status of the health check
+    /// Overall status of the application health check.
+    status: Status,
+    /// Status of all the health checks performed.
+    checks: Vec<HealthCheck>,
+}
+
+/// The [`HealthCheck`] struct contains the result of an individual health check which typically
+/// targets a specific piece of infrastructure that the application relies on to function properly.
+#[derive(Debug, Serialize)]
+struct HealthCheck {
+    /// Name of the health check module.
+    name: String,
+    /// Status of the health check module.
     status: Status,
 }
 
@@ -34,5 +46,8 @@ struct Health {
 /// }
 async fn check_health() -> Json<Health> {
     // TODO: ping db and kafka infra and probably just warn if unable to connect?
-    Json(Health { status: Status::Ok })
+    Json(Health {
+        status: Status::Ok,
+        checks: Vec::new(),
+    })
 }

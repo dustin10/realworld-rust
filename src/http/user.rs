@@ -267,11 +267,11 @@ async fn login_user(
     ctx: State<AppContext>,
     Json(request): Json<UserBody<LoginUserRequest>>,
 ) -> Result<Response, Error> {
-    let mut tx = ctx.db.begin().await?;
+    let mut cxn = ctx.db.acquire().await?;
 
     // if no user is found then just return UNAUTHORIZED instead of not found to prevent an
     // attacker from fishing for valid email addresses
-    let response = match db::user::query_user_by_email(&mut tx, &request.user.email).await? {
+    match db::user::query_user_by_email(&mut cxn, &request.user.email).await? {
         None => Ok(StatusCode::UNAUTHORIZED.into_response()),
         Some(db_user) => {
             let resp = if auth::verify_password(request.user.password, db_user.password.clone())
@@ -289,7 +289,7 @@ async fn login_user(
                     payload: Some(user_event),
                 };
 
-                let _ = db::outbox::create_outbox_entry(&mut tx, create_outbox_entry).await?;
+                let _ = db::outbox::create_outbox_entry(&mut cxn, create_outbox_entry).await?;
 
                 let token = auth::mint_jwt(db_user.id, &ctx.config.signing_key).map_err(|e| {
                     tracing::error!("error minting jwt: {}", e);
@@ -297,6 +297,13 @@ async fn login_user(
                 })?;
 
                 let user = User::from_db_user_with_token(db_user, token);
+
+                match ctx.outbox_tx.send(()).await {
+                    Ok(_) => tracing::debug!("successfully notified outbox processor of new entry"),
+                    Err(e) => {
+                        tracing::warn!("failed to notify outbox processor of new entry: {}", e)
+                    }
+                }
 
                 Json(UserBody { user }).into_response()
             } else {
@@ -306,17 +313,7 @@ async fn login_user(
 
             Ok(resp)
         }
-    };
-
-    tx.commit().await?;
-
-    // TODO: only do this if we actually have a successful login
-    match ctx.outbox_tx.send(()).await {
-        Ok(_) => tracing::debug!("successfully notified outbox processor of new entry"),
-        Err(e) => tracing::warn!("failed to notify outbox processor of new entry: {}", e),
     }
-
-    response
 }
 
 /// Handles the get current user API endpoint at `GET /api/user`. The handler will read the id of
@@ -337,20 +334,16 @@ async fn login_user(
 /// }
 /// ```
 async fn get_user(ctx: State<AppContext>, auth_ctx: AuthContext) -> Result<Response, Error> {
-    let mut tx = ctx.db.begin().await?;
+    let mut cxn = ctx.db.acquire().await?;
 
-    let response = match db::user::query_user_by_id(&mut tx, &auth_ctx.user_id).await? {
+    match db::user::query_user_by_id(&mut cxn, &auth_ctx.user_id).await? {
         Some(db_user) => {
             let user = User::from_db_user_with_token(db_user, auth_ctx.encoded_jwt);
 
             Ok(Json(UserBody { user }).into_response())
         }
         None => Ok(StatusCode::NOT_FOUND.into_response()),
-    };
-
-    tx.commit().await?;
-
-    response
+    }
 }
 
 /// Handles the update user API endpoint at `PUT /api/users`. The handler will read the id of the
@@ -397,7 +390,7 @@ async fn update_user(
 ) -> Result<Response, Error> {
     let mut tx = ctx.db.begin().await?;
 
-    let response = match db::user::query_user_by_id(&mut tx, &auth_ctx.user_id).await? {
+    match db::user::query_user_by_id(&mut tx, &auth_ctx.user_id).await? {
         None => Ok(StatusCode::UNAUTHORIZED.into_response()),
         Some(db_user) => {
             let username = request.user.username.as_ref().unwrap_or(&db_user.name);
@@ -444,17 +437,14 @@ async fn update_user(
 
             let user = User::from_db_user_with_token(db_user, auth_ctx.encoded_jwt);
 
+            tx.commit().await?;
+
+            match ctx.outbox_tx.send(()).await {
+                Ok(_) => tracing::debug!("successfully notified outbox processor of new entry"),
+                Err(e) => tracing::warn!("failed to notify outbox processor of new entry: {}", e),
+            }
+
             Ok(Json(UserBody { user }).into_response())
         }
-    };
-
-    tx.commit().await?;
-
-    // TODO: only do this if we actually have a successful update
-    match ctx.outbox_tx.send(()).await {
-        Ok(_) => tracing::debug!("successfully notified outbox processor of new entry"),
-        Err(e) => tracing::warn!("failed to notify outbox processor of new entry: {}", e),
     }
-
-    response
 }

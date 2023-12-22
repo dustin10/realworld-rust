@@ -400,10 +400,10 @@ async fn list_articles(
 ) -> Result<Json<ArticlesBody>, Error> {
     let user_ctx = auth_ctx.map(|ac| ac.user_id);
 
-    let mut tx = ctx.db.begin().await?;
+    let mut cxn = ctx.db.acquire().await?;
 
     let articles = db::article::query_articles(
-        &mut tx,
+        &mut cxn,
         user_ctx,
         filters.tag.as_ref(),
         filters.author.as_ref(),
@@ -417,7 +417,7 @@ async fn list_articles(
     .collect();
 
     let articles_count = db::article::count_articles(
-        &mut tx,
+        &mut cxn,
         filters.tag.as_ref(),
         filters.author.as_ref(),
         filters.favorited.as_ref(),
@@ -461,18 +461,16 @@ async fn user_feed(
     auth_ctx: AuthContext,
     page: Query<Pagination>,
 ) -> Result<Json<ArticlesBody>, Error> {
-    let mut tx = ctx.db.begin().await?;
+    let mut cxn = ctx.db.acquire().await?;
 
     let articles =
-        db::article::query_user_feed(&mut tx, &auth_ctx.user_id, page.0.limit, page.0.offset)
+        db::article::query_user_feed(&mut cxn, &auth_ctx.user_id, page.0.limit, page.0.offset)
             .await?
             .into_iter()
             .map(Article::with_db_view)
             .collect();
 
-    let articles_count = db::article::count_user_feed(&mut tx, &auth_ctx.user_id).await?;
-
-    tx.commit().await?;
+    let articles_count = db::article::count_user_feed(&mut cxn, &auth_ctx.user_id).await?;
 
     Ok(Json(ArticlesBody {
         articles,
@@ -608,20 +606,16 @@ async fn get_article(
 ) -> Result<Response, Error> {
     let user_ctx = auth_ctx.map(|ac| ac.user_id);
 
-    let mut tx = ctx.db.begin().await?;
+    let mut tx = ctx.db.acquire().await?;
 
-    let response = match db::article::query_article_view_by_slug(&mut tx, &slug, user_ctx).await? {
+    match db::article::query_article_view_by_slug(&mut tx, &slug, user_ctx).await? {
         None => Ok(StatusCode::NOT_FOUND.into_response()),
         Some(db_view) => {
             let article = Article::with_db_view(db_view);
 
             Ok(Json(ArticleBody { article }).into_response())
         }
-    };
-
-    tx.commit().await?;
-
-    response
+    }
 }
 
 /// Handles the update article by slug API endpoint at `PUT /api/articles/:slug`. The handler will
@@ -677,7 +671,7 @@ async fn update_article(
 ) -> Result<Response, Error> {
     let mut tx = ctx.db.begin().await?;
 
-    let response = match db::article::query_article_by_slug(&mut tx, &slug).await? {
+    match db::article::query_article_by_slug(&mut tx, &slug).await? {
         None => Ok(StatusCode::NOT_FOUND.into_response()),
         Some(row) => {
             if auth_ctx.user_id != row.user_id {
@@ -723,20 +717,19 @@ async fn update_article(
 
                 let _ = db::outbox::create_outbox_entry(&mut tx, create_outbox_entry).await?;
 
+                tx.commit().await?;
+
+                match ctx.outbox_tx.send(()).await {
+                    Ok(_) => tracing::debug!("successfully notified outbox processor of new entry"),
+                    Err(e) => {
+                        tracing::warn!("failed to notify outbox processor of new entry: {}", e)
+                    }
+                }
+
                 Ok(Json(ArticleBody { article }).into_response())
             }
         }
-    };
-
-    tx.commit().await?;
-
-    // TODO: only do this if we have a successful update
-    match ctx.outbox_tx.send(()).await {
-        Ok(_) => tracing::debug!("successfully notified outbox processor of new entry"),
-        Err(e) => tracing::warn!("failed to notify outbox processor of new entry: {}", e),
     }
-
-    response
 }
 
 /// Handles the delete article by slug API endpoint at `DELETE /api/articles/:slug`. The handler
@@ -751,7 +744,7 @@ async fn delete_article(
 ) -> Result<Response, Error> {
     let mut tx = ctx.db.begin().await?;
 
-    let response = match db::article::query_article_by_slug(&mut tx, &slug).await? {
+    match db::article::query_article_by_slug(&mut tx, &slug).await? {
         None => Ok(StatusCode::NOT_FOUND.into_response()),
         Some(article) => {
             if auth_ctx.user_id != article.user_id {
@@ -772,19 +765,16 @@ async fn delete_article(
 
             let _ = db::outbox::create_outbox_entry(&mut tx, create_outbox_entry).await?;
 
+            tx.commit().await?;
+
+            match ctx.outbox_tx.send(()).await {
+                Ok(_) => tracing::debug!("successfully notified outbox processor of new entry"),
+                Err(e) => tracing::warn!("failed to notify outbox processor of new entry: {}", e),
+            }
+
             Ok(StatusCode::NO_CONTENT.into_response())
         }
-    };
-
-    tx.commit().await?;
-
-    // TODO: only do this if we have a successful delete
-    match ctx.outbox_tx.send(()).await {
-        Ok(_) => tracing::debug!("successfully notified outbox processor of new entry"),
-        Err(e) => tracing::warn!("failed to notify outbox processor of new entry: {}", e),
     }
-
-    response
 }
 
 /// Handles the create article comment API endpoint at `POST /api/articles/:slug/comments`.
@@ -828,7 +818,7 @@ async fn create_comment(
 ) -> Result<Response, Error> {
     let mut tx = ctx.db.begin().await?;
 
-    let response = match db::article::query_article_by_slug(&mut tx, &slug).await? {
+    match db::article::query_article_by_slug(&mut tx, &slug).await? {
         None => Ok(StatusCode::NOT_FOUND.into_response()),
         Some(article) => {
             let data = db::article::CreateComment {
@@ -853,20 +843,17 @@ async fn create_comment(
             };
 
             let _ = db::outbox::create_outbox_entry(&mut tx, create_outbox_entry).await?;
+            tx.commit().await?;
+
+            // TODO: only do this if we have a successful create
+            match ctx.outbox_tx.send(()).await {
+                Ok(_) => tracing::debug!("successfully notified outbox processor of new entry"),
+                Err(e) => tracing::warn!("failed to notify outbox processor of new entry: {}", e),
+            }
 
             Ok(Json(CommentBody { comment }).into_response())
         }
-    };
-
-    tx.commit().await?;
-
-    // TODO: only do this if we have a successful create
-    match ctx.outbox_tx.send(()).await {
-        Ok(_) => tracing::debug!("successfully notified outbox processor of new entry"),
-        Err(e) => tracing::warn!("failed to notify outbox processor of new entry: {}", e),
     }
-
-    response
 }
 
 /// Handles the get article comments API endpoint at `GET /api/articles/:slug/comments`. If there
@@ -897,15 +884,13 @@ async fn get_comments(
 ) -> Result<Json<CommentsBody>, Error> {
     let user_ctx = auth_ctx.map(|ac| ac.user_id);
 
-    let mut tx = ctx.db.begin().await?;
+    let mut cxn = ctx.db.acquire().await?;
 
-    let comments = db::article::query_article_comments_by_slug(&mut tx, &slug, user_ctx)
+    let comments = db::article::query_article_comments_by_slug(&mut cxn, &slug, user_ctx)
         .await?
         .into_iter()
         .map(Comment::with_db_view)
         .collect();
-
-    tx.commit().await?;
 
     Ok(Json(CommentsBody { comments }))
 }
@@ -918,7 +903,7 @@ async fn delete_comment(
 ) -> Result<Response, Error> {
     let mut tx = ctx.db.begin().await?;
 
-    let response = match db::article::query_article_by_slug(&mut tx, &slug).await? {
+    match db::article::query_article_by_slug(&mut tx, &slug).await? {
         None => Ok(StatusCode::NOT_FOUND.into_response()),
         Some(article) => {
             // TODO: we could do better here by checking affected rows affected and returning 404 if zero
@@ -936,19 +921,16 @@ async fn delete_comment(
 
             let _ = db::outbox::create_outbox_entry(&mut tx, create_outbox_entry).await?;
 
+            tx.commit().await?;
+
+            match ctx.outbox_tx.send(()).await {
+                Ok(_) => tracing::debug!("successfully notified outbox processor of new entry"),
+                Err(e) => tracing::warn!("failed to notify outbox processor of new entry: {}", e),
+            }
+
             Ok(StatusCode::NO_CONTENT.into_response())
         }
-    };
-
-    tx.commit().await?;
-
-    // TODO: only do this if we have a successful delete
-    match ctx.outbox_tx.send(()).await {
-        Ok(_) => tracing::debug!("successfully notified outbox processor of new entry"),
-        Err(e) => tracing::warn!("failed to notify outbox processor of new entry: {}", e),
     }
-
-    response
 }
 
 /// Handles the favorite article API endpoint at `POST /api/articles/:slug/favorite`. The handler
@@ -986,8 +968,10 @@ async fn favorite_article(
 ) -> Result<Response, Error> {
     let mut tx = ctx.db.begin().await?;
 
-    // TODO: handle case where favorite entry already exists
-    let response = match db::article::query_article_by_slug(&mut tx, &slug).await? {
+    // TODO: Handle case where favorite entry already exists with regard to publishing the event.
+    // Currently an event will always be published whether the favorite already exists or not which
+    // may be acceptable dependin on the use case.
+    match db::article::query_article_by_slug(&mut tx, &slug).await? {
         None => Ok(StatusCode::NOT_FOUND.into_response()),
         Some(article) => {
             let article =
@@ -1009,19 +993,16 @@ async fn favorite_article(
 
             let _ = db::outbox::create_outbox_entry(&mut tx, create_outbox_entry).await?;
 
+            tx.commit().await?;
+
+            match ctx.outbox_tx.send(()).await {
+                Ok(_) => tracing::debug!("successfully notified outbox processor of new entry"),
+                Err(e) => tracing::warn!("failed to notify outbox processor of new entry: {}", e),
+            }
+
             Ok(Json(ArticleBody { article }).into_response())
         }
-    };
-
-    tx.commit().await?;
-
-    // TODO: only do this if we have a successful addition
-    match ctx.outbox_tx.send(()).await {
-        Ok(_) => tracing::debug!("successfully notified outbox processor of new entry"),
-        Err(e) => tracing::warn!("failed to notify outbox processor of new entry: {}", e),
     }
-
-    response
 }
 
 /// Handles the unfavorite article API endpoint at `DELETE /api/articles/:slug/favorite`. The handler
@@ -1059,7 +1040,7 @@ async fn unfavorite_article(
 ) -> Result<Response, Error> {
     let mut tx = ctx.db.begin().await?;
 
-    let response = match db::article::query_article_by_slug(&mut tx, &slug).await? {
+    match db::article::query_article_by_slug(&mut tx, &slug).await? {
         None => Ok(StatusCode::NOT_FOUND.into_response()),
         Some(article) => {
             let article =
@@ -1081,17 +1062,14 @@ async fn unfavorite_article(
 
             let _ = db::outbox::create_outbox_entry(&mut tx, create_outbox_entry).await?;
 
+            tx.commit().await?;
+
+            match ctx.outbox_tx.send(()).await {
+                Ok(_) => tracing::debug!("successfully notified outbox processor of new entry"),
+                Err(e) => tracing::warn!("failed to notify outbox processor of new entry: {}", e),
+            }
+
             Ok(Json(ArticleBody { article }).into_response())
         }
-    };
-
-    tx.commit().await?;
-
-    // TODO: only do this if we have a successful removal
-    match ctx.outbox_tx.send(()).await {
-        Ok(_) => tracing::debug!("successfully notified outbox processor of new entry"),
-        Err(e) => tracing::warn!("failed to notify outbox processor of new entry: {}", e),
     }
-
-    response
 }

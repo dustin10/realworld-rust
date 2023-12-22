@@ -9,7 +9,7 @@ addition to the spec defined at the site mentioned above.
 
 * Implementation of the [Transactional Outbox](https://microservices.io/patterns/data/transactional-outbox.html)
 pattern for publishing events to Kafka
-* Kafka event consumer that outputs the event data published by the application
+* Kafka event consumer that logs the event data published by the application
 
 ## Stack
 
