@@ -158,8 +158,8 @@ mod tests {
 
         assert_eq!("localhost:29092", config.kafka.servers);
 
-        assert_eq!(1000, config.outbox.interval);
-        assert_eq!(10, config.outbox.batch_size);
+        assert_eq!(30000, config.outbox.interval);
+        assert_eq!(100, config.outbox.batch_size);
     }
 
     /// Verifies that a configured env variable correctly overrides the corresponding configuration

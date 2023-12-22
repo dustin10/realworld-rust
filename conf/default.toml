@@ -17,4 +17,4 @@ servers = "localhost:29092"
 [outbox]
 channel_size = 128
 interval = 30000
-batch_size = 10
+batch_size = 100
