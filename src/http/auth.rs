@@ -70,7 +70,7 @@ impl FromRequestParts<AppContext> for AuthContext {
             Some(hdr) => {
                 let jwt = &hdr[AUTH_PREFIX.len()..];
 
-                verify_jwt(jwt, &state.config.signing_key).map_err(|e| {
+                verify_jwt(jwt, &state.config.http.signing_key).map_err(|e| {
                     tracing::error!("error verifying JWT: {}", e);
                     StatusCode::UNAUTHORIZED
                 })

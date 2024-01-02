@@ -26,6 +26,10 @@ pub enum Error {
 pub struct Http {
     /// Port that the HTTP server should listen on.
     pub port: u16,
+    /// Key used for HMAC JWT signing when minting tokens and authenticating users. In a real
+    /// application this would probably be a pointer to a key that is stored in a secure location
+    /// like AWS Secrets Manager or similar rather than passing it in directly as an env variable.
+    pub signing_key: String,
 }
 
 /// The [`Database`] struct contains all of the configuration values related to the database that
@@ -81,10 +85,6 @@ pub struct Outbox {
 /// The [`Config`] struct contains all of the available application configuration.
 #[derive(Debug, Deserialize)]
 pub struct Config {
-    /// Key used for HMAC JWT signing when minting tokens and authenticating users. In a real
-    /// application this would probably be a pointer to a key that is stored in a secure location
-    /// like AWS Secrets Manager or similar rather than passing it in directly as an env variable.
-    pub signing_key: String,
     /// HTTP configuration for the application.
     pub http: Http,
     /// Database configuration for the application.
@@ -145,9 +145,8 @@ mod tests {
     fn verify_default_configuration() {
         let config = Config::default();
 
-        assert_eq!("default-signing-key", config.signing_key);
-
         assert_eq!(7100, config.http.port);
+        assert_eq!("default-signing-key", config.http.signing_key);
 
         assert_eq!("postgres", config.database.user);
         assert_eq!("", config.database.password);

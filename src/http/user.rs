@@ -215,7 +215,7 @@ async fn create_user(
 
     let _ = db::outbox::create_outbox_entry(&mut tx, create_outbox_entry).await?;
 
-    let token = auth::mint_jwt(db_user.id, &ctx.config.signing_key).map_err(|e| {
+    let token = auth::mint_jwt(db_user.id, &ctx.config.http.signing_key).map_err(|e| {
         tracing::error!("error minting jwt: {}", e);
         Error::Internal
     })?;
@@ -291,10 +291,11 @@ async fn login_user(
 
                 let _ = db::outbox::create_outbox_entry(&mut cxn, create_outbox_entry).await?;
 
-                let token = auth::mint_jwt(db_user.id, &ctx.config.signing_key).map_err(|e| {
-                    tracing::error!("error minting jwt: {}", e);
-                    Error::Internal
-                })?;
+                let token =
+                    auth::mint_jwt(db_user.id, &ctx.config.http.signing_key).map_err(|e| {
+                        tracing::error!("error minting jwt: {}", e);
+                        Error::Internal
+                    })?;
 
                 let user = User::from_db_user_with_token(db_user, token);
 
