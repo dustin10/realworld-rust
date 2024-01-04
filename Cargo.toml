@@ -8,29 +8,29 @@ repository = "https://github.com/dustin10/realworld-rust"
 readme = "./README.md"
 
 [dependencies]
-anyhow = "1.0.75"
+anyhow = "1.0.79"
 argon2 = "0.5.2"
-async-trait = "0.1.74"
-axum = { version = "0.7.2" }
+async-trait = "0.1.77"
+axum = { version = "0.7.3" }
 chrono = { version = "0.4.31", features = ["serde"] }
 config = "0.13.4"
 dotenvy = "0.15.7"
-futures = "0.3.29"
+futures = "0.3.30"
 hmac = "0.12.1"
 http = "1.0.0"
 jwt = "0.16.0"
 rayon = "1.8.0"
-rdkafka = { version = "0.35.0", features = ["cmake-build"] }
-serde = { version = "1.0.193", features = ["derive"] }
-serde_json = "1.0.108"
+rdkafka = { version = "0.36.0", features = ["cmake-build"] }
+serde = { version = "1.0.194", features = ["derive"] }
+serde_json = "1.0.111"
 sha2 = "0.10.8"
 slug = "0.1.5"
 sqlx = { version = "0.7.3", features = ["runtime-tokio-native-tls", "postgres", "macros", "uuid", "chrono", "json"] }
 thiserror = "1.0.50"
-tokio = { version = "1.35.0", features = ["full"] }
+tokio = { version = "1.35.1", features = ["full"] }
 tracing = { version = "0.1.40", features = ["log"] }
 tracing-subscriber = { version = "0.3.18", features = ["json", "env-filter"] }
 uuid = { version = "1.6.1", features = ["v4", "fast-rng", "serde"] }
 
 [dev-dependencies]
-mockall = "0.12.0"
+mockall = "0.12.1"
