@@ -1,7 +1,6 @@
-signing_key = "default-signing-key"
-
 [http]
 port = "7100"
+signing_key = "default-signing-key"
 
 [database]
 user = "postgres"
