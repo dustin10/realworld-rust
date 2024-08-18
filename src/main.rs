@@ -87,7 +87,7 @@ async fn main() -> anyhow::Result<()> {
     };
 
     #[cfg(not(unix))]
-    let shutdown_signal = futures::future::pending::<()>();
+    let terminate_signal = futures::future::pending::<()>();
 
     // Install a handler for the ctrl + c key combination so we can cleanly shutdown if a user
     // manually closes the application through the terminal.
