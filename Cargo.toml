@@ -8,9 +8,9 @@ repository = "https://github.com/dustin10/realworld-rust"
 readme = "./README.md"
 
 [dependencies]
-anyhow = "1.0.86"
+anyhow = "1.0.87"
 argon2 = "0.5.3"
-async-trait = "0.1.81"
+async-trait = "0.1.82"
 axum = { version = "0.7.5" }
 chrono = { version = "0.4.38", features = ["serde"] }
 config = "0.14.0"
@@ -21,13 +21,13 @@ http = "1.1.0"
 jwt = "0.16.0"
 rayon = "1.10.0"
 rdkafka = { version = "0.36.2", features = ["cmake-build"] }
-serde = { version = "1.0.208", features = ["derive"] }
-serde_json = "1.0.125"
+serde = { version = "1.0.210", features = ["derive"] }
+serde_json = "1.0.128"
 sha2 = "0.10.8"
 slug = "0.1.6"
-sqlx = { version = "0.8.0", features = ["runtime-tokio-native-tls", "postgres", "macros", "uuid", "chrono", "json"] }
+sqlx = { version = "0.8.2", features = ["runtime-tokio-native-tls", "postgres", "macros", "uuid", "chrono", "json"] }
 thiserror = "1.0.63"
-tokio = { version = "1.39.3", features = ["full"] }
+tokio = { version = "1.40.0", features = ["full"] }
 tracing = { version = "0.1.40", features = ["log"] }
 tracing-subscriber = { version = "0.3.18", features = ["json", "env-filter"] }
 uuid = { version = "1.10.0", features = ["v4", "fast-rng", "serde"] }
